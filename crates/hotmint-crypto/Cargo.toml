@@ -1,0 +1,12 @@
+[package]
+name = "hotmint-crypto"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hotmint-types = { workspace = true }
+serde = { workspace = true }
+ruc = { workspace = true }
+blake3 = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
