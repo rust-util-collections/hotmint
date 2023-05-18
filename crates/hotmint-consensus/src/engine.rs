@@ -26,6 +26,8 @@ pub struct ConsensusEngine {
     msg_rx: mpsc::UnboundedReceiver<(ValidatorId, ConsensusMessage)>,
     /// Collected status certs from replicas (for leader)
     status_count: usize,
+    /// The QC formed in this view's first voting round (used to build DoubleCert)
+    current_view_qc: Option<QuorumCertificate>,
 }
 
 impl ConsensusEngine {
@@ -47,6 +49,7 @@ impl ConsensusEngine {
             pacemaker: Pacemaker::new(),
             msg_rx,
             status_count: 0,
+            current_view_qc: None,
         }
     }
 
@@ -108,9 +111,9 @@ impl ConsensusEngine {
             self.app.as_ref(),
             self.signer.as_ref(),
         ) {
-            Ok(_block) => {
-                // Also vote for own block (leader votes for itself)
-                self.leader_self_vote();
+            Ok(block) => {
+                // Leader votes for its own block
+                self.leader_self_vote(block.hash);
             }
             Err(e) => {
                 warn!(
@@ -122,45 +125,22 @@ impl ConsensusEngine {
         }
     }
 
-    fn leader_self_vote(&mut self) {
-        // The leader also votes for its own proposal
-        if self.state.highest_qc.is_some() {
-            // Find the block we just proposed (latest block at current view)
-            let block_hash = self.find_proposed_block_hash();
-            if let Some(hash) = block_hash {
-                let vote_bytes =
-                    Vote::signing_bytes(self.state.current_view, &hash, VoteType::Vote);
-                let signature = self.signer.sign(&vote_bytes);
-                let vote = Vote {
-                    block_hash: hash,
-                    view: self.state.current_view,
-                    validator: self.state.validator_id,
-                    signature,
-                    vote_type: VoteType::Vote,
-                };
-                if let Ok(Some(formed_qc)) = self
-                    .vote_collector
-                    .add_vote(&self.state.validator_set, vote)
-                {
-                    self.on_qc_formed(formed_qc);
-                }
-            }
+    fn leader_self_vote(&mut self, block_hash: BlockHash) {
+        let vote_bytes = Vote::signing_bytes(self.state.current_view, &block_hash, VoteType::Vote);
+        let signature = self.signer.sign(&vote_bytes);
+        let vote = Vote {
+            block_hash,
+            view: self.state.current_view,
+            validator: self.state.validator_id,
+            signature,
+            vote_type: VoteType::Vote,
+        };
+        if let Ok(Some(formed_qc)) = self
+            .vote_collector
+            .add_vote(&self.state.validator_set, vote)
+        {
+            self.on_qc_formed(formed_qc);
         }
-    }
-
-    fn find_proposed_block_hash(&self) -> Option<BlockHash> {
-        // Search store for a block at current view by this proposer
-        // Since we just stored it, check by height
-        let height = self.state.last_committed_height.next();
-        // Walk up from committed height
-        let mut h = height;
-        while let Some(block) = self.store.get_block_by_height(h) {
-            if block.view == self.state.current_view && block.proposer == self.state.validator_id {
-                return Some(block.hash);
-            }
-            h = h.next();
-        }
-        None
     }
 
     fn handle_message(&mut self, _sender: ValidatorId, msg: ConsensusMessage) -> Result<()> {
@@ -320,6 +300,9 @@ impl ConsensusEngine {
     }
 
     fn on_qc_formed(&mut self, qc: QuorumCertificate) {
+        // Save the QC so we can reliably pair it when forming a DoubleCert
+        self.current_view_qc = Some(qc.clone());
+
         view_protocol::on_votes_collected(
             &mut self.state,
             qc.clone(),
@@ -359,20 +342,23 @@ impl ConsensusEngine {
     }
 
     fn on_double_cert_formed(&mut self, outer_qc: QuorumCertificate) {
-        // The inner QC is the one we locked on (the QC from first voting round)
-        let inner_qc = match &self.state.locked_qc {
-            Some(qc) if qc.block_hash == outer_qc.block_hash => qc.clone(),
+        // Use the QC we explicitly saved from this view's first voting round
+        let inner_qc = match self.current_view_qc.take() {
+            Some(qc) if qc.block_hash == outer_qc.block_hash => qc,
             _ => {
-                // Try highest_qc
-                match &self.state.highest_qc {
+                // Fallback to locked_qc or highest_qc
+                match &self.state.locked_qc {
                     Some(qc) if qc.block_hash == outer_qc.block_hash => qc.clone(),
-                    _ => {
-                        warn!(
-                            validator = %self.state.validator_id,
-                            "double cert formed but can't find matching inner QC"
-                        );
-                        return;
-                    }
+                    _ => match &self.state.highest_qc {
+                        Some(qc) if qc.block_hash == outer_qc.block_hash => qc.clone(),
+                        _ => {
+                            warn!(
+                                validator = %self.state.validator_id,
+                                "double cert formed but can't find matching inner QC"
+                            );
+                            return;
+                        }
+                    },
                 }
             }
         };
@@ -459,6 +445,7 @@ impl ConsensusEngine {
         self.vote_collector.clear_view(self.state.current_view);
         self.pacemaker.clear_view(self.state.current_view);
         self.status_count = 0;
+        self.current_view_qc = None;
 
         view_protocol::enter_view(
             &mut self.state,

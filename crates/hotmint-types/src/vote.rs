@@ -32,3 +32,32 @@ impl Vote {
         buf
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_signing_bytes_deterministic() {
+        let hash = BlockHash([42u8; 32]);
+        let a = Vote::signing_bytes(ViewNumber(5), &hash, VoteType::Vote);
+        let b = Vote::signing_bytes(ViewNumber(5), &hash, VoteType::Vote);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_signing_bytes_differ_by_type() {
+        let hash = BlockHash([1u8; 32]);
+        let a = Vote::signing_bytes(ViewNumber(1), &hash, VoteType::Vote);
+        let b = Vote::signing_bytes(ViewNumber(1), &hash, VoteType::Vote2);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_signing_bytes_differ_by_view() {
+        let hash = BlockHash([1u8; 32]);
+        let a = Vote::signing_bytes(ViewNumber(1), &hash, VoteType::Vote);
+        let b = Vote::signing_bytes(ViewNumber(2), &hash, VoteType::Vote);
+        assert_ne!(a, b);
+    }
+}

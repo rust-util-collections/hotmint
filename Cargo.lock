@@ -243,10 +243,12 @@ dependencies = [
  "bincode",
  "hotmint-crypto",
  "hotmint-types",
+ "rand",
  "ruc",
  "serde",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

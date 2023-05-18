@@ -96,7 +96,7 @@ impl Pacemaker {
             }
 
             Some(TimeoutCertificate {
-                view: ViewNumber(target_view.as_u64() - 1),
+                view: ViewNumber(target_view.as_u64().saturating_sub(1)),
                 aggregate_signature: agg,
                 highest_qcs,
             })

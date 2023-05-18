@@ -11,3 +11,7 @@ bincode = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 ruc = { workspace = true }
+
+[dev-dependencies]
+tracing-subscriber = { workspace = true }
+rand = { workspace = true }

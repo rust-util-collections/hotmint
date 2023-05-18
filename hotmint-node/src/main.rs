@@ -67,7 +67,7 @@ async fn main() {
     info!(
         validators = NUM_VALIDATORS,
         quorum = validator_set.quorum_threshold(),
-        max_faulty = validator_set.max_faulty(),
+        max_faulty_power = validator_set.max_faulty_power(),
         "validator set created"
     );
 
