@@ -1,0 +1,12 @@
+[package]
+name = "hotmint-storage"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hotmint-types = { workspace = true }
+hotmint-consensus = { workspace = true }
+serde = { workspace = true }
+ruc = { workspace = true }
+tracing = { workspace = true }
+vsdb = { workspace = true }

@@ -22,19 +22,20 @@ pub fn try_commit(
         return Ok(vec![]);
     }
 
-    // Collect all uncommitted ancestors (from lowest to highest)
+    // Collect all uncommitted ancestors (from highest to lowest)
     let mut to_commit = Vec::new();
-    let mut current = commit_block.clone();
+    let mut current = commit_block;
     loop {
         if current.height <= *last_committed_height {
             break;
         }
-        to_commit.push(current.clone());
-        if current.parent_hash == BlockHash::GENESIS {
+        let parent_hash = current.parent_hash;
+        to_commit.push(current);
+        if parent_hash == BlockHash::GENESIS {
             break;
         }
-        match store.get_block(&current.parent_hash) {
-            Some(parent) => current = parent.clone(),
+        match store.get_block(&parent_hash) {
+            Some(parent) => current = parent,
             None => break,
         }
     }

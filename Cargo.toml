@@ -4,20 +4,24 @@ members = [
     "crates/hotmint-types",
     "crates/hotmint-crypto",
     "crates/hotmint-consensus",
+    "crates/hotmint-storage",
     "hotmint-node",
 ]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
-bincode = "1"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 ruc = "9.3"
+rmp-serde = "1"
 blake3 = "1"
 ed25519-dalek = { version = "2", features = ["serde", "rand_core"] }
+# rand stays at 0.8 for ed25519-dalek 2.x compat (uses rand_core 0.6)
 rand = "0.8"
+vsdb = "9.1"
 
 hotmint-types = { path = "crates/hotmint-types" }
 hotmint-crypto = { path = "crates/hotmint-crypto" }
 hotmint-consensus = { path = "crates/hotmint-consensus" }
+hotmint-storage = { path = "crates/hotmint-storage" }

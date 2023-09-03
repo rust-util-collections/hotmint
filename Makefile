@@ -1,5 +1,9 @@
 CARGO := cargo
 
+# System rocksdb (required by vsdb)
+export ROCKSDB_INCLUDE_DIR ?= /opt/homebrew/include
+export ROCKSDB_LIB_DIR ?= /opt/homebrew/lib
+
 .PHONY: all fmt lint build test run clean check doc
 
 all: fmt lint build test

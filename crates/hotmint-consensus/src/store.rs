@@ -4,8 +4,8 @@ use hotmint_types::{Block, BlockHash, Height};
 
 pub trait BlockStore: Send + Sync {
     fn put_block(&mut self, block: Block);
-    fn get_block(&self, hash: &BlockHash) -> Option<&Block>;
-    fn get_block_by_height(&self, h: Height) -> Option<&Block>;
+    fn get_block(&self, hash: &BlockHash) -> Option<Block>;
+    fn get_block_by_height(&self, h: Height) -> Option<Block>;
 }
 
 /// In-memory block store stub
@@ -39,13 +39,14 @@ impl BlockStore for MemoryBlockStore {
         self.by_hash.insert(hash, block);
     }
 
-    fn get_block(&self, hash: &BlockHash) -> Option<&Block> {
-        self.by_hash.get(hash)
+    fn get_block(&self, hash: &BlockHash) -> Option<Block> {
+        self.by_hash.get(hash).cloned()
     }
 
-    fn get_block_by_height(&self, h: Height) -> Option<&Block> {
+    fn get_block_by_height(&self, h: Height) -> Option<Block> {
         self.by_height
             .get(&h.as_u64())
             .and_then(|hash| self.by_hash.get(hash))
+            .cloned()
     }
 }
