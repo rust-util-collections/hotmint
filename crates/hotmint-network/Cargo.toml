@@ -1,0 +1,15 @@
+[package]
+name = "hotmint-network"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hotmint-types = { workspace = true }
+hotmint-consensus = { workspace = true }
+serde = { workspace = true }
+rmp-serde = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+ruc = { workspace = true }
+litep2p = { workspace = true }
+futures = { workspace = true }
