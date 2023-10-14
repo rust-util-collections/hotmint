@@ -273,6 +273,11 @@ impl ConsensusEngine {
             }
 
             ConsensusMessage::TimeoutCert(tc) => {
+                // TC relay: rebroadcast if not yet relayed
+                if self.pacemaker.should_relay_tc(&tc) {
+                    self.network
+                        .broadcast(ConsensusMessage::TimeoutCert(tc.clone()));
+                }
                 let new_view = ViewNumber(tc.view.as_u64() + 1);
                 if new_view > self.state.current_view {
                     self.advance_view(ViewEntryTrigger::TimeoutCert(tc));
@@ -424,8 +429,8 @@ impl ConsensusEngine {
             return;
         }
 
-        // Reset timer for another attempt
-        self.pacemaker.reset_timer();
+        // Exponential backoff on repeated timeouts
+        self.pacemaker.on_timeout();
     }
 
     fn advance_view(&mut self, trigger: ViewEntryTrigger) {
@@ -442,6 +447,9 @@ impl ConsensusEngine {
             return;
         }
 
+        // Reset backoff on successful progress (DoubleCert path)
+        let is_progress = matches!(&trigger, ViewEntryTrigger::DoubleCert(_));
+
         self.vote_collector.clear_view(self.state.current_view);
         self.pacemaker.clear_view(self.state.current_view);
         self.status_count = 0;
@@ -454,7 +462,12 @@ impl ConsensusEngine {
             self.network.as_ref(),
             self.signer.as_ref(),
         );
-        self.pacemaker.reset_timer();
+
+        if is_progress {
+            self.pacemaker.reset_on_progress();
+        } else {
+            self.pacemaker.reset_timer();
+        }
 
         // If we're the leader, we may need to propose
         if self.state.is_leader() && self.state.step == ViewStep::WaitingForStatus {
