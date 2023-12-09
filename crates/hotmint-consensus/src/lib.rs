@@ -3,6 +3,7 @@ pub mod commit;
 pub mod engine;
 pub mod error;
 pub mod leader;
+pub mod metrics;
 pub mod network;
 pub mod pacemaker;
 pub mod state;

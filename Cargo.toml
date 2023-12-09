@@ -23,6 +23,7 @@ rand = "0.8"
 vsdb = "9.1"
 litep2p = "0.13"
 futures = "0.3"
+prometheus-client = "0.23"
 
 hotmint-types = { path = "crates/hotmint-types" }
 hotmint-crypto = { path = "crates/hotmint-crypto" }

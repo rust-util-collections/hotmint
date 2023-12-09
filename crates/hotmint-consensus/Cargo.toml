@@ -11,6 +11,7 @@ rmp-serde = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 ruc = { workspace = true }
+prometheus-client = { workspace = true }
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }
