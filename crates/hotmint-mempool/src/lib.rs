@@ -1,0 +1,161 @@
+use std::collections::VecDeque;
+use tokio::sync::Mutex;
+use tracing::debug;
+
+/// Transaction hash for deduplication
+pub type TxHash = [u8; 32];
+
+/// Simple mempool: FIFO queue with deduplication
+pub struct Mempool {
+    txs: Mutex<VecDeque<Vec<u8>>>,
+    seen: Mutex<std::collections::HashSet<TxHash>>,
+    max_size: usize,
+    max_tx_bytes: usize,
+}
+
+impl Mempool {
+    pub fn new(max_size: usize, max_tx_bytes: usize) -> Self {
+        Self {
+            txs: Mutex::new(VecDeque::new()),
+            seen: Mutex::new(std::collections::HashSet::new()),
+            max_size,
+            max_tx_bytes,
+        }
+    }
+
+    /// Add a transaction to the mempool. Returns false if rejected.
+    pub async fn add_tx(&self, tx: Vec<u8>) -> bool {
+        if tx.len() > self.max_tx_bytes {
+            debug!(size = tx.len(), max = self.max_tx_bytes, "tx too large");
+            return false;
+        }
+
+        let hash = Self::hash_tx(&tx);
+
+        let mut seen = self.seen.lock().await;
+        if seen.contains(&hash) {
+            return false;
+        }
+
+        let mut txs = self.txs.lock().await;
+        if txs.len() >= self.max_size {
+            debug!(size = txs.len(), max = self.max_size, "mempool full");
+            return false;
+        }
+
+        seen.insert(hash);
+        txs.push_back(tx);
+        true
+    }
+
+    /// Collect transactions for a block proposal (up to max_bytes total)
+    pub async fn collect_payload(&self, max_bytes: usize) -> Vec<u8> {
+        let mut txs = self.txs.lock().await;
+        let mut payload = Vec::new();
+        let mut collected = Vec::new();
+
+        while let Some(tx) = txs.front() {
+            // 4 bytes length prefix + tx bytes
+            if payload.len() + 4 + tx.len() > max_bytes {
+                break;
+            }
+            let tx = txs.pop_front().unwrap();
+            let len = tx.len() as u32;
+            payload.extend_from_slice(&len.to_le_bytes());
+            payload.extend_from_slice(&tx);
+            collected.push(tx);
+        }
+
+        // Put back uncollected txs at the front
+        // (already consumed — collect only takes from front)
+
+        payload
+    }
+
+    /// Reap collected payload back into individual transactions
+    pub fn decode_payload(payload: &[u8]) -> Vec<Vec<u8>> {
+        let mut txs = Vec::new();
+        let mut offset = 0;
+        while offset + 4 <= payload.len() {
+            let len = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+            if offset + len > payload.len() {
+                break;
+            }
+            txs.push(payload[offset..offset + len].to_vec());
+            offset += len;
+        }
+        txs
+    }
+
+    pub async fn size(&self) -> usize {
+        self.txs.lock().await.len()
+    }
+
+    fn hash_tx(tx: &[u8]) -> TxHash {
+        blake3_hash(tx)
+    }
+}
+
+fn blake3_hash(data: &[u8]) -> TxHash {
+    // Simple hash using first 32 bytes of a basic hash
+    // Not using blake3 crate here to keep mempool dependency-light
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    data.hash(&mut hasher);
+    let h = hasher.finish();
+    let mut out = [0u8; 32];
+    out[..8].copy_from_slice(&h.to_le_bytes());
+    // Add length for disambiguation
+    out[8..12].copy_from_slice(&(data.len() as u32).to_le_bytes());
+    out
+}
+
+impl Default for Mempool {
+    fn default() -> Self {
+        Self::new(10_000, 1_048_576) // 10k txs, 1MB max per tx
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_add_and_collect() {
+        let pool = Mempool::new(100, 1024);
+        assert!(pool.add_tx(b"tx1".to_vec()).await);
+        assert!(pool.add_tx(b"tx2".to_vec()).await);
+        assert_eq!(pool.size().await, 2);
+
+        let payload = pool.collect_payload(1024).await;
+        let txs = Mempool::decode_payload(&payload);
+        assert_eq!(txs.len(), 2);
+        assert_eq!(txs[0], b"tx1");
+        assert_eq!(txs[1], b"tx2");
+    }
+
+    #[tokio::test]
+    async fn test_dedup() {
+        let pool = Mempool::new(100, 1024);
+        assert!(pool.add_tx(b"tx1".to_vec()).await);
+        assert!(!pool.add_tx(b"tx1".to_vec()).await); // duplicate
+        assert_eq!(pool.size().await, 1);
+    }
+
+    #[tokio::test]
+    async fn test_max_size() {
+        let pool = Mempool::new(2, 1024);
+        assert!(pool.add_tx(b"tx1".to_vec()).await);
+        assert!(pool.add_tx(b"tx2".to_vec()).await);
+        assert!(!pool.add_tx(b"tx3".to_vec()).await); // full
+    }
+
+    #[tokio::test]
+    async fn test_tx_too_large() {
+        let pool = Mempool::new(100, 4);
+        assert!(!pool.add_tx(b"toolarge".to_vec()).await);
+        assert!(pool.add_tx(b"ok".to_vec()).await);
+    }
+}

@@ -1,0 +1,13 @@
+[package]
+name = "hotmint-api"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hotmint-types = { workspace = true }
+hotmint-mempool = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ruc = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

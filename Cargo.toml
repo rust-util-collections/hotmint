@@ -6,6 +6,8 @@ members = [
     "crates/hotmint-consensus",
     "crates/hotmint-storage",
     "crates/hotmint-network",
+    "crates/hotmint-mempool",
+    "crates/hotmint-api",
     "hotmint-node",
 ]
 
@@ -24,9 +26,12 @@ vsdb = "9.1"
 litep2p = "0.13"
 futures = "0.3"
 prometheus-client = "0.23"
+serde_json = "1"
 
 hotmint-types = { path = "crates/hotmint-types" }
 hotmint-crypto = { path = "crates/hotmint-crypto" }
 hotmint-consensus = { path = "crates/hotmint-consensus" }
 hotmint-storage = { path = "crates/hotmint-storage" }
 hotmint-network = { path = "crates/hotmint-network" }
+hotmint-mempool = { path = "crates/hotmint-mempool" }
+hotmint-api = { path = "crates/hotmint-api" }

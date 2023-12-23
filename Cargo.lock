@@ -813,6 +813,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hotmint-api"
+version = "0.1.0"
+dependencies = [
+ "hotmint-mempool",
+ "hotmint-types",
+ "ruc",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "hotmint-consensus"
 version = "0.1.0"
 dependencies = [
@@ -838,6 +851,15 @@ dependencies = [
  "rand 0.8.5",
  "ruc",
  "serde",
+]
+
+[[package]]
+name = "hotmint-mempool"
+version = "0.1.0"
+dependencies = [
+ "ruc",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
