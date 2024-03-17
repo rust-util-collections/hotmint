@@ -34,6 +34,10 @@ impl RpcServer {
         })
     }
 
+    pub fn local_addr(&self) -> std::net::SocketAddr {
+        self.listener.local_addr().expect("listener has local addr")
+    }
+
     pub async fn run(self) {
         loop {
             match self.listener.accept().await {
@@ -77,7 +81,10 @@ async fn handle_request(state: &RpcState, line: &str) -> RpcResponse {
                 last_committed_height: height,
                 mempool_size: state.mempool.size().await,
             };
-            RpcResponse::ok(req.id, serde_json::to_value(info).unwrap())
+            match serde_json::to_value(info) {
+                Ok(v) => RpcResponse::ok(req.id, v),
+                Err(e) => RpcResponse::err(req.id, -32603, format!("serialization error: {e}")),
+            }
         }
         "submit_tx" => {
             let tx_hex = req.params.as_str().unwrap_or_default();
@@ -88,7 +95,10 @@ async fn handle_request(state: &RpcState, line: &str) -> RpcResponse {
                 }
             };
             let accepted = state.mempool.add_tx(tx_bytes).await;
-            RpcResponse::ok(req.id, serde_json::to_value(TxResult { accepted }).unwrap())
+            match serde_json::to_value(TxResult { accepted }) {
+                Ok(v) => RpcResponse::ok(req.id, v),
+                Err(e) => RpcResponse::err(req.id, -32603, format!("serialization error: {e}")),
+            }
         }
         _ => RpcResponse::err(req.id, -32601, format!("unknown method: {}", req.method)),
     }

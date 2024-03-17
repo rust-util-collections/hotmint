@@ -9,14 +9,14 @@ pub struct RpcRequest {
 }
 
 /// JSON-RPC response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RpcResponse {
     pub result: Option<serde_json::Value>,
     pub error: Option<RpcError>,
     pub id: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RpcError {
     pub code: i32,
     pub message: String,

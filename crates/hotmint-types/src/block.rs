@@ -79,3 +79,45 @@ mod hex {
         bytes.iter().map(|b| format!("{:02x}", b)).collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_block_hash_genesis() {
+        assert!(BlockHash::GENESIS.is_genesis());
+        assert!(!BlockHash([1u8; 32]).is_genesis());
+    }
+
+    #[test]
+    fn test_block_hash_display() {
+        let h = BlockHash([
+            0xab, 0xcd, 0xef, 0x12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0,
+        ]);
+        assert_eq!(format!("{h}"), "abcdef12");
+    }
+
+    #[test]
+    fn test_height_next() {
+        assert_eq!(Height(0).next(), Height(1));
+        assert_eq!(Height(99).next(), Height(100));
+    }
+
+    #[test]
+    fn test_height_ordering() {
+        assert!(Height(1) < Height(2));
+        assert!(Height(5) > Height(3));
+        assert!(Height(0) <= Height::GENESIS);
+    }
+
+    #[test]
+    fn test_genesis_block() {
+        let g = Block::genesis();
+        assert_eq!(g.height, Height::GENESIS);
+        assert!(g.parent_hash.is_genesis());
+        assert!(g.hash.is_genesis());
+        assert!(g.payload.is_empty());
+    }
+}

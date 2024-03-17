@@ -158,4 +158,51 @@ mod tests {
         assert!(!pool.add_tx(b"toolarge".to_vec()).await);
         assert!(pool.add_tx(b"ok".to_vec()).await);
     }
+
+    #[tokio::test]
+    async fn test_collect_respects_max_bytes() {
+        let pool = Mempool::new(100, 1024);
+        pool.add_tx(b"aaaa".to_vec()).await;
+        pool.add_tx(b"bbbb".to_vec()).await;
+        pool.add_tx(b"cccc".to_vec()).await;
+
+        // Each tx: 4 bytes len prefix + 4 bytes data = 8 bytes
+        // max_bytes = 17 should fit 2 txs (16 bytes) but not 3 (24 bytes)
+        let payload = pool.collect_payload(17).await;
+        let txs = Mempool::decode_payload(&payload);
+        assert_eq!(txs.len(), 2);
+    }
+
+    #[test]
+    fn test_decode_empty_payload() {
+        let txs = Mempool::decode_payload(&[]);
+        assert!(txs.is_empty());
+    }
+
+    #[test]
+    fn test_decode_truncated_payload() {
+        // Only 2 bytes when expecting at least 4 for length prefix
+        let txs = Mempool::decode_payload(&[1, 2]);
+        assert!(txs.is_empty());
+    }
+
+    #[test]
+    fn test_decode_payload_with_truncated_data() {
+        // Length prefix says 100 bytes but only 3 available
+        let mut payload = vec![];
+        payload.extend_from_slice(&100u32.to_le_bytes());
+        payload.extend_from_slice(&[1, 2, 3]);
+        let txs = Mempool::decode_payload(&payload);
+        assert!(txs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_empty_tx() {
+        let pool = Mempool::new(100, 1024);
+        assert!(pool.add_tx(vec![]).await);
+        let payload = pool.collect_payload(1024).await;
+        let txs = Mempool::decode_payload(&payload);
+        assert_eq!(txs.len(), 1);
+        assert!(txs[0].is_empty());
+    }
 }

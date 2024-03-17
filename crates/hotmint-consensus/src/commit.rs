@@ -51,3 +51,127 @@ pub fn try_commit(
 
     Ok(to_commit)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::NoopApplication;
+    use crate::store::MemoryBlockStore;
+    use hotmint_types::{AggregateSignature, QuorumCertificate, ValidatorId, ViewNumber};
+
+    fn make_block(height: u64, parent: BlockHash) -> Block {
+        let hash = BlockHash([height as u8; 32]);
+        Block {
+            height: Height(height),
+            parent_hash: parent,
+            view: ViewNumber(height),
+            proposer: ValidatorId(0),
+            payload: vec![],
+            hash,
+        }
+    }
+
+    fn make_qc(hash: BlockHash, view: u64) -> QuorumCertificate {
+        QuorumCertificate {
+            block_hash: hash,
+            view: ViewNumber(view),
+            aggregate_signature: AggregateSignature::new(4),
+        }
+    }
+
+    #[test]
+    fn test_commit_single_block() {
+        let mut store = MemoryBlockStore::new();
+        let app = NoopApplication;
+        let b1 = make_block(1, BlockHash::GENESIS);
+        store.put_block(b1.clone());
+
+        let dc = DoubleCertificate {
+            inner_qc: make_qc(b1.hash, 1),
+            outer_qc: make_qc(b1.hash, 1),
+        };
+
+        let mut last = Height::GENESIS;
+        let committed = try_commit(&dc, &store, &app, &mut last).unwrap();
+        assert_eq!(committed.len(), 1);
+        assert_eq!(committed[0].height, Height(1));
+        assert_eq!(last, Height(1));
+    }
+
+    #[test]
+    fn test_commit_chain_of_blocks() {
+        let mut store = MemoryBlockStore::new();
+        let app = NoopApplication;
+        let b1 = make_block(1, BlockHash::GENESIS);
+        let b2 = make_block(2, b1.hash);
+        let b3 = make_block(3, b2.hash);
+        store.put_block(b1);
+        store.put_block(b2);
+        store.put_block(b3.clone());
+
+        let dc = DoubleCertificate {
+            inner_qc: make_qc(b3.hash, 3),
+            outer_qc: make_qc(b3.hash, 3),
+        };
+
+        let mut last = Height::GENESIS;
+        let committed = try_commit(&dc, &store, &app, &mut last).unwrap();
+        assert_eq!(committed.len(), 3);
+        assert_eq!(committed[0].height, Height(1));
+        assert_eq!(committed[1].height, Height(2));
+        assert_eq!(committed[2].height, Height(3));
+        assert_eq!(last, Height(3));
+    }
+
+    #[test]
+    fn test_commit_already_committed() {
+        let mut store = MemoryBlockStore::new();
+        let app = NoopApplication;
+        let b1 = make_block(1, BlockHash::GENESIS);
+        store.put_block(b1.clone());
+
+        let dc = DoubleCertificate {
+            inner_qc: make_qc(b1.hash, 1),
+            outer_qc: make_qc(b1.hash, 1),
+        };
+
+        let mut last = Height(1); // already committed
+        let committed = try_commit(&dc, &store, &app, &mut last).unwrap();
+        assert!(committed.is_empty());
+    }
+
+    #[test]
+    fn test_commit_partial_chain() {
+        let mut store = MemoryBlockStore::new();
+        let app = NoopApplication;
+        let b1 = make_block(1, BlockHash::GENESIS);
+        let b2 = make_block(2, b1.hash);
+        let b3 = make_block(3, b2.hash);
+        store.put_block(b1);
+        store.put_block(b2);
+        store.put_block(b3.clone());
+
+        let dc = DoubleCertificate {
+            inner_qc: make_qc(b3.hash, 3),
+            outer_qc: make_qc(b3.hash, 3),
+        };
+
+        let mut last = Height(1); // b1 already committed
+        let committed = try_commit(&dc, &store, &app, &mut last).unwrap();
+        assert_eq!(committed.len(), 2); // only b2 and b3
+        assert_eq!(committed[0].height, Height(2));
+        assert_eq!(committed[1].height, Height(3));
+    }
+
+    #[test]
+    fn test_commit_missing_block() {
+        let store = MemoryBlockStore::new();
+        let app = NoopApplication;
+        let dc = DoubleCertificate {
+            inner_qc: make_qc(BlockHash([99u8; 32]), 1),
+            outer_qc: make_qc(BlockHash([99u8; 32]), 1),
+        };
+        let mut last = Height::GENESIS;
+        assert!(try_commit(&dc, &store, &app, &mut last).is_err());
+    }
+}

@@ -51,3 +51,38 @@ pub trait Verifier: Send + Sync {
     fn verify(&self, pk: &PublicKey, msg: &[u8], sig: &Signature) -> bool;
     fn verify_aggregate(&self, vs: &ValidatorSet, msg: &[u8], agg: &AggregateSignature) -> bool;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_aggregate_signature_add() {
+        let mut agg = AggregateSignature::new(4);
+        assert_eq!(agg.count(), 0);
+        agg.add(0, Signature(vec![1])).unwrap();
+        assert_eq!(agg.count(), 1);
+        agg.add(2, Signature(vec![2])).unwrap();
+        assert_eq!(agg.count(), 2);
+    }
+
+    #[test]
+    fn test_aggregate_signature_duplicate_rejected() {
+        let mut agg = AggregateSignature::new(4);
+        agg.add(1, Signature(vec![1])).unwrap();
+        assert!(agg.add(1, Signature(vec![2])).is_err());
+    }
+
+    #[test]
+    fn test_aggregate_signature_out_of_bounds() {
+        let mut agg = AggregateSignature::new(3);
+        assert!(agg.add(3, Signature(vec![1])).is_err());
+        assert!(agg.add(100, Signature(vec![1])).is_err());
+    }
+
+    #[test]
+    fn test_aggregate_signature_zero_size() {
+        let agg = AggregateSignature::new(0);
+        assert_eq!(agg.count(), 0);
+    }
+}

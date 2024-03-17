@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 
 use crate::crypto::PublicKey;
@@ -28,17 +29,44 @@ pub struct ValidatorInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidatorSet {
-    pub validators: Vec<ValidatorInfo>,
-    pub total_power: u64,
+    validators: Vec<ValidatorInfo>,
+    total_power: u64,
+    /// O(1) lookup: ValidatorId -> index in validators vec
+    #[serde(skip)]
+    index_map: HashMap<ValidatorId, usize>,
 }
 
 impl ValidatorSet {
     pub fn new(validators: Vec<ValidatorInfo>) -> Self {
         let total_power = validators.iter().map(|v| v.power).sum();
+        let index_map = validators
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (v.id, i))
+            .collect();
         Self {
             validators,
             total_power,
+            index_map,
         }
+    }
+
+    /// Rebuild the index map after deserialization
+    pub fn rebuild_index(&mut self) {
+        self.index_map = self
+            .validators
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (v.id, i))
+            .collect();
+    }
+
+    pub fn validators(&self) -> &[ValidatorInfo] {
+        &self.validators
+    }
+
+    pub fn total_power(&self) -> u64 {
+        self.total_power
     }
 
     /// Quorum threshold: ceil(2n/3) where n = total_power
@@ -46,8 +74,7 @@ impl ValidatorSet {
         (self.total_power * 2).div_ceil(3)
     }
 
-    /// Maximum faulty power: f = (total_power - quorum_threshold)
-    /// i.e. total_power - ceil(2*total_power/3)
+    /// Maximum faulty power: total_power - quorum_threshold
     pub fn max_faulty_power(&self) -> u64 {
         self.total_power - self.quorum_threshold()
     }
@@ -62,12 +89,14 @@ impl ValidatorSet {
         self.validators.len()
     }
 
+    /// O(1) index lookup
     pub fn index_of(&self, id: ValidatorId) -> Option<usize> {
-        self.validators.iter().position(|v| v.id == id)
+        self.index_map.get(&id).copied()
     }
 
+    /// O(1) validator info lookup
     pub fn get(&self, id: ValidatorId) -> Option<&ValidatorInfo> {
-        self.validators.iter().find(|v| v.id == id)
+        self.index_map.get(&id).map(|&idx| &self.validators[idx])
     }
 
     pub fn power_of(&self, id: ValidatorId) -> u64 {
@@ -95,9 +124,9 @@ mod tests {
     #[test]
     fn test_quorum_4_equal() {
         let vs = make_vs(&[1, 1, 1, 1]);
-        assert_eq!(vs.total_power, 4);
-        assert_eq!(vs.quorum_threshold(), 3); // ceil(8/3) = 3
-        assert_eq!(vs.max_faulty_power(), 1); // 4 - 3 = 1
+        assert_eq!(vs.total_power(), 4);
+        assert_eq!(vs.quorum_threshold(), 3);
+        assert_eq!(vs.max_faulty_power(), 1);
     }
 
     #[test]
@@ -109,11 +138,16 @@ mod tests {
 
     #[test]
     fn test_quorum_weighted() {
-        // 10+10+10+70 = 100, quorum = ceil(200/3) = 67
         let vs = make_vs(&[10, 10, 10, 70]);
         assert_eq!(vs.quorum_threshold(), 67);
-        // max faulty = 100 - 67 = 33
         assert_eq!(vs.max_faulty_power(), 33);
+    }
+
+    #[test]
+    fn test_quorum_single_validator() {
+        let vs = make_vs(&[1]);
+        assert_eq!(vs.quorum_threshold(), 1);
+        assert_eq!(vs.max_faulty_power(), 0);
     }
 
     #[test]
@@ -126,11 +160,31 @@ mod tests {
     }
 
     #[test]
-    fn test_index_of_and_power_of() {
+    fn test_index_of_o1() {
         let vs = make_vs(&[5, 10, 15]);
+        assert_eq!(vs.index_of(ValidatorId(0)), Some(0));
         assert_eq!(vs.index_of(ValidatorId(1)), Some(1));
+        assert_eq!(vs.index_of(ValidatorId(2)), Some(2));
         assert_eq!(vs.index_of(ValidatorId(99)), None);
+    }
+
+    #[test]
+    fn test_get_and_power_of() {
+        let vs = make_vs(&[5, 10, 15]);
+        assert_eq!(vs.get(ValidatorId(1)).unwrap().power, 10);
+        assert!(vs.get(ValidatorId(99)).is_none());
         assert_eq!(vs.power_of(ValidatorId(2)), 15);
         assert_eq!(vs.power_of(ValidatorId(99)), 0);
+    }
+
+    #[test]
+    fn test_serialization_roundtrip() {
+        let vs = make_vs(&[1, 2, 3]);
+        let bytes = rmp_serde::to_vec(&vs).unwrap();
+        let mut vs2: ValidatorSet = rmp_serde::from_slice(&bytes).unwrap();
+        vs2.rebuild_index();
+        assert_eq!(vs2.validator_count(), 3);
+        assert_eq!(vs2.index_of(ValidatorId(1)), Some(1));
+        assert_eq!(vs2.total_power(), 6);
     }
 }

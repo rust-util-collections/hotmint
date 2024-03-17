@@ -74,7 +74,10 @@ impl Verifier for Ed25519Verifier {
             if sig_idx >= agg.signatures.len() {
                 return false;
             }
-            let pk = &vs.validators[i].public_key;
+            let Some(vi) = vs.validators().get(i) else {
+                return false;
+            };
+            let pk = &vi.public_key;
             if !self.verify(pk, msg, &agg.signatures[sig_idx]) {
                 return false;
             }

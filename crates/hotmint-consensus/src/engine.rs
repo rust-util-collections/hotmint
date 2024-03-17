@@ -159,12 +159,14 @@ impl ConsensusEngine {
                 if block.view > self.state.current_view {
                     if let Some(ref dc) = double_cert {
                         // Fast-forward via double cert
-                        let _ = try_commit(
+                        if let Err(e) = try_commit(
                             dc,
                             self.store.as_ref(),
                             self.app.as_ref(),
                             &mut self.state.last_committed_height,
-                        );
+                        ) {
+                            warn!(error = %e, "try_commit failed during fast-forward");
+                        }
                         self.state.highest_double_cert = Some(dc.clone());
                         self.advance_view_to(block.view, ViewEntryTrigger::DoubleCert(dc.clone()));
                     } else {
@@ -378,12 +380,14 @@ impl ConsensusEngine {
         );
 
         // Commit
-        let _ = try_commit(
+        if let Err(e) = try_commit(
             &dc,
             self.store.as_ref(),
             self.app.as_ref(),
             &mut self.state.last_committed_height,
-        );
+        ) {
+            warn!(error = %e, "try_commit failed in double cert handler");
+        }
 
         self.state.highest_double_cert = Some(dc.clone());
 

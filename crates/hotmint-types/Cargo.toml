@@ -6,3 +6,6 @@ edition = "2024"
 [dependencies]
 serde = { workspace = true }
 ruc = { workspace = true }
+
+[dev-dependencies]
+rmp-serde = { workspace = true }

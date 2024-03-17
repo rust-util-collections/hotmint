@@ -908,6 +908,7 @@ dependencies = [
 name = "hotmint-types"
 version = "0.1.0"
 dependencies = [
+ "rmp-serde",
  "ruc",
  "serde",
 ]
