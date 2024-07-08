@@ -1,0 +1,66 @@
+//! # Hotmint
+//!
+//! A BFT consensus framework combining Tendermint's engineering ergonomics
+//! with HotStuff-2's two-chain commit protocol.
+//!
+//! Hotmint is designed as a library crate (like `tendermint-core`) that
+//! developers embed to build their own consensus-driven applications.
+//!
+//! # Crate Layout
+//!
+//! - [`types`] — Core data types: `Block`, `Vote`, `QC`, `ValidatorSet`, etc.
+//! - [`crypto`] — Cryptographic primitives: Ed25519 signing, Blake3 hashing
+//! - [`consensus`] — The HotStuff-2 state machine and engine
+//! - [`storage`] — Persistent block/state storage (vsdb/rocksdb)
+//! - [`network`] — P2P networking via litep2p
+//! - [`mempool`] — Transaction buffering and deduplication
+//! - [`api`] — JSON-RPC API for external interaction
+//!
+//! # Quick Start
+//!
+//! ```rust,no_run
+//! use hotmint::prelude::*;
+//! use hotmint::consensus::{ConsensusEngine, ConsensusState};
+//! use hotmint::consensus::application::Application;
+//!
+//! // Implement your application logic
+//! struct MyApp;
+//! impl Application for MyApp {
+//!     fn on_commit(&self, block: &hotmint::types::Block) -> ruc::Result<()> {
+//!         println!("committed block at height {}", block.height);
+//!         Ok(())
+//!     }
+//! }
+//! ```
+
+/// Core data types: Block, Vote, QC, ValidatorSet, ConsensusMessage, etc.
+pub use hotmint_types as types;
+
+/// Cryptographic primitives: Ed25519 signing/verification, Blake3 hashing,
+/// aggregate signatures.
+pub use hotmint_crypto as crypto;
+
+/// The HotStuff-2 consensus state machine, engine, pacemaker, and traits
+/// (`Application`, `BlockStore`, `NetworkSink`).
+pub use hotmint_consensus as consensus;
+
+/// Persistent storage backends (vsdb/rocksdb).
+pub use hotmint_storage as storage;
+
+/// P2P networking via litep2p (notification + request-response protocols).
+pub use hotmint_network as network;
+
+/// Transaction mempool with FIFO ordering and deduplication.
+pub use hotmint_mempool as mempool;
+
+/// JSON-RPC API for external interaction (status, transaction submission).
+pub use hotmint_api as api;
+
+/// Prelude: commonly used types re-exported for convenience.
+pub mod prelude {
+    pub use hotmint_types::{
+        Block, BlockHash, ConsensusMessage, DoubleCertificate, Epoch, EpochNumber, Height,
+        QuorumCertificate, Signer, TimeoutCertificate, ValidatorId, ValidatorInfo, ValidatorSet,
+        Verifier, ViewNumber, Vote, VoteType,
+    };
+}

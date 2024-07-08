@@ -115,23 +115,28 @@ hotmint/
 │   ├── hotmint-mempool/           # transaction mempool
 │   │   └── src/lib.rs             # Mempool (FIFO, dedup, payload encoding)
 │   │
-│   └── hotmint-api/               # JSON-RPC API
+│   ├── hotmint-api/               # JSON-RPC API
+│   │   └── src/
+│   │       ├── rpc.rs             # RpcServer over TCP
+│   │       └── types.rs           # RpcRequest, RpcResponse, StatusInfo
+│   │
+│   └── hotmint/                   # top-level library crate (facade)
 │       └── src/
-│           ├── rpc.rs             # RpcServer over TCP
-│           └── types.rs           # RpcRequest, RpcResponse, StatusInfo
-│
-└── hotmint-node/                  # executable binary
-    └── src/
-        └── main.rs                # launches 4 in-process validators, runs consensus
+│           ├── lib.rs             # re-exports all sub-crates + prelude
+│           └── bin/
+│               └── node.rs        # [[bin]] demo: 4 in-process validators
 ```
 
 ### Dependency Graph
 
 ```
-hotmint-node -> hotmint-consensus -> hotmint-types
-             -> hotmint-storage   -> hotmint-crypto -> hotmint-types
-             -> hotmint-network   -> litep2p
-             -> hotmint-api       -> hotmint-mempool
+hotmint (library facade)
+  ├── hotmint-consensus -> hotmint-types
+  ├── hotmint-crypto    -> hotmint-types
+  ├── hotmint-storage   -> hotmint-consensus, vsdb
+  ├── hotmint-network   -> hotmint-consensus, litep2p
+  ├── hotmint-mempool
+  └── hotmint-api       -> hotmint-mempool
 ```
 
 The consensus engine communicates with the network layer via `tokio::mpsc` channels and has no direct dependency on any networking crate.
@@ -305,6 +310,31 @@ Message dispatch:
 | HotStuff: BFT Consensus (PODC 2019) | [arXiv:1803.05069](https://arxiv.org/abs/1803.05069) | Linear communication, pipelining |
 | Tendermint: Latest Gossip on BFT (2018) | [arXiv:1807.04938](https://arxiv.org/abs/1807.04938) | Production BFT, ABCI architecture |
 
+## Usage
+
+Add `hotmint` as a dependency in your `Cargo.toml`:
+
+```toml
+[dependencies]
+hotmint = { git = "https://github.com/user/hotmint" }
+```
+
+Implement the `Application` trait and wire up your consensus node:
+
+```rust
+use hotmint::prelude::*;
+use hotmint::consensus::application::Application;
+
+struct MyApp;
+
+impl Application for MyApp {
+    fn on_commit(&self, block: &Block) -> ruc::Result<()> {
+        // process committed block
+        Ok(())
+    }
+}
+```
+
 ## Quick Start
 
 ```bash
@@ -314,9 +344,8 @@ cargo build --workspace
 # run tests
 cargo test --workspace
 
-# run the 4-node in-process consensus demo
-cargo run
-# observe tracing logs: proposal -> vote -> QC -> double cert -> commit
+# run the 4-node in-process demo
+cargo run --bin hotmint-node
 ```
 
 ## License

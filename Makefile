@@ -21,7 +21,7 @@ test:
 	$(CARGO) test --workspace
 
 run:
-	$(CARGO) run
+	$(CARGO) run --bin hotmint-node
 
 check:
 	$(CARGO) check --workspace --all-targets

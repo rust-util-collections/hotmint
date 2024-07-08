@@ -1,13 +1,27 @@
 [package]
-name = "hotmint-node"
+name = "hotmint"
 version = "0.1.0"
 edition = "2024"
+description = "A BFT consensus framework combining Tendermint's ergonomics with HotStuff-2's protocol efficiency"
+license = "GPL-3.0"
+
+[lib]
+name = "hotmint"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hotmint-node"
+path = "src/bin/node.rs"
 
 [dependencies]
 hotmint-types = { workspace = true }
 hotmint-crypto = { workspace = true }
 hotmint-consensus = { workspace = true }
 hotmint-storage = { workspace = true }
+hotmint-network = { workspace = true }
+hotmint-mempool = { workspace = true }
+hotmint-api = { workspace = true }
+
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

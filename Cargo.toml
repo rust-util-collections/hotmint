@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/hotmint",
     "crates/hotmint-types",
     "crates/hotmint-crypto",
     "crates/hotmint-consensus",
@@ -8,7 +9,6 @@ members = [
     "crates/hotmint-network",
     "crates/hotmint-mempool",
     "crates/hotmint-api",
-    "hotmint-node",
 ]
 
 [workspace.dependencies]

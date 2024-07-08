@@ -3,19 +3,18 @@ use ruc::*;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use hotmint_consensus::application::Application;
-use hotmint_consensus::engine::ConsensusEngine;
-use hotmint_consensus::network::ChannelNetwork;
-use hotmint_consensus::state::ConsensusState;
-use hotmint_consensus::store::MemoryBlockStore;
-use hotmint_crypto::Ed25519Signer;
-use hotmint_types::*;
+use hotmint::consensus::application::Application;
+use hotmint::consensus::engine::ConsensusEngine;
+use hotmint::consensus::network::ChannelNetwork;
+use hotmint::consensus::state::ConsensusState;
+use hotmint::consensus::store::MemoryBlockStore;
+use hotmint::crypto::Ed25519Signer;
+use hotmint::prelude::*;
 use tokio::sync::mpsc;
 use tracing::{Level, info};
 
 const NUM_VALIDATORS: u64 = 4;
 
-/// Simple application that counts committed blocks
 struct CountingApp {
     validator_id: ValidatorId,
     commit_count: AtomicU64,
@@ -44,12 +43,10 @@ async fn main() {
 
     info!("starting hotmint with {} validators", NUM_VALIDATORS);
 
-    // Generate key pairs for each validator
     let mut signers: Vec<Option<Ed25519Signer>> = (0..NUM_VALIDATORS)
         .map(|i| Some(Ed25519Signer::generate(ValidatorId(i))))
         .collect();
 
-    // Build validator set (capture public keys before moving signers)
     let validator_infos: Vec<ValidatorInfo> = signers
         .iter()
         .enumerate()
@@ -57,7 +54,7 @@ async fn main() {
             let s = s.as_ref().unwrap();
             ValidatorInfo {
                 id: ValidatorId(i as u64),
-                public_key: hotmint_types::Signer::public_key(s),
+                public_key: Signer::public_key(s),
                 power: 1,
             }
         })
@@ -71,7 +68,6 @@ async fn main() {
         "validator set created"
     );
 
-    // Create channels: each validator gets a receiver, and all others get a sender to it
     let mut receivers = HashMap::new();
     let mut all_senders: HashMap<
         ValidatorId,
@@ -85,14 +81,12 @@ async fn main() {
         all_senders.insert(vid, tx);
     }
 
-    // Spawn each validator
     let mut handles = Vec::new();
 
     for i in 0..NUM_VALIDATORS {
         let vid = ValidatorId(i);
         let rx = pnk!(receivers.remove(&vid));
 
-        // Build network: list of (target_id, sender_to_target)
         let senders: Vec<(
             ValidatorId,
             mpsc::UnboundedSender<(ValidatorId, ConsensusMessage)>,
@@ -119,15 +113,11 @@ async fn main() {
             rx,
         );
 
-        let handle = tokio::spawn(async move {
-            engine.run().await;
-        });
-        handles.push(handle);
+        handles.push(tokio::spawn(async move { engine.run().await }));
     }
 
     info!("all validators spawned, consensus running...");
 
-    // Let it run for a while, then check progress
     tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
     info!("shutting down after 30 seconds");
 }
