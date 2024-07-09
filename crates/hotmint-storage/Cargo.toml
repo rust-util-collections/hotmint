@@ -1,7 +1,9 @@
 [package]
 name = "hotmint-storage"
-version = "0.1.0"
-edition = "2024"
+description = "Persistent storage backends for Hotmint (vsdb/rocksdb)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [dependencies]
 hotmint-types = { workspace = true }

@@ -1,7 +1,9 @@
 [package]
 name = "hotmint-network"
-version = "0.1.0"
-edition = "2024"
+description = "P2P networking layer for Hotmint using litep2p"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [dependencies]
 hotmint-types = { workspace = true }

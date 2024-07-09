@@ -4,7 +4,7 @@ CARGO := cargo
 export ROCKSDB_INCLUDE_DIR ?= /opt/homebrew/include
 export ROCKSDB_LIB_DIR ?= /opt/homebrew/lib
 
-.PHONY: all fmt lint build test run clean check doc
+.PHONY: all fmt lint build test bench bench-e2e run clean check doc
 
 all: fmt lint build test
 
@@ -19,6 +19,12 @@ build:
 
 test:
 	$(CARGO) test --workspace
+
+bench:
+	$(CARGO) bench --workspace
+
+bench-e2e:
+	$(CARGO) run --release --bin hotmint-bench-e2e
 
 run:
 	$(CARGO) run --bin hotmint-node

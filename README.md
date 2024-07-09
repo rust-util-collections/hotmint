@@ -151,11 +151,11 @@ trait Signer: Send + Sync {
     fn validator_id(&self) -> ValidatorId;
 }
 
-// Block persistence
+// Block persistence (returns owned values for vsdb compatibility)
 trait BlockStore: Send + Sync {
     fn put_block(&mut self, block: Block);
-    fn get_block(&self, hash: &BlockHash) -> Option<&Block>;
-    fn get_block_by_height(&self, h: Height) -> Option<&Block>;
+    fn get_block(&self, hash: &BlockHash) -> Option<Block>;
+    fn get_block_by_height(&self, h: Height) -> Option<Block>;
 }
 
 // Network transport
@@ -164,15 +164,20 @@ trait NetworkSink: Send + Sync {
     fn send_to(&self, target: ValidatorId, msg: ConsensusMessage);
 }
 
-// Application layer
+// Application layer (ABCI-like lifecycle)
 trait Application: Send + Sync {
     fn create_payload(&self) -> Vec<u8>;
     fn validate_block(&self, block: &Block) -> bool;
+    fn validate_tx(&self, tx: &[u8]) -> bool;
+    fn begin_block(&self, height: Height, view: ViewNumber) -> Result<()>;
+    fn deliver_tx(&self, tx: &[u8]) -> Result<()>;
+    fn end_block(&self, height: Height) -> Result<()>;
     fn on_commit(&self, block: &Block) -> Result<()>;
+    fn query(&self, path: &str, data: &[u8]) -> Result<Vec<u8>>;
 }
 ```
 
-Each trait has a stub implementation (in-memory store, channel network, no-op app) that will be replaced with production-grade implementations in later phases.
+Each trait provides default implementations and has a stub (in-memory store, channel network, no-op app) for development use.
 
 ## Core Types
 

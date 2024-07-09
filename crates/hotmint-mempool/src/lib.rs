@@ -48,11 +48,12 @@ impl Mempool {
         true
     }
 
-    /// Collect transactions for a block proposal (up to max_bytes total)
+    /// Collect transactions for a block proposal (up to max_bytes total).
+    /// Collected transactions are removed from the pool.
+    /// The payload is length-prefixed: `[u32_le len][bytes]...`
     pub async fn collect_payload(&self, max_bytes: usize) -> Vec<u8> {
         let mut txs = self.txs.lock().await;
         let mut payload = Vec::new();
-        let mut collected = Vec::new();
 
         while let Some(tx) = txs.front() {
             // 4 bytes length prefix + tx bytes
@@ -63,11 +64,7 @@ impl Mempool {
             let len = tx.len() as u32;
             payload.extend_from_slice(&len.to_le_bytes());
             payload.extend_from_slice(&tx);
-            collected.push(tx);
         }
-
-        // Put back uncollected txs at the front
-        // (already consumed — collect only takes from front)
 
         payload
     }

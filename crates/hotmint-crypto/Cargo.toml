@@ -1,7 +1,9 @@
 [package]
 name = "hotmint-crypto"
-version = "0.1.0"
-edition = "2024"
+description = "Cryptographic primitives for Hotmint: Ed25519, Blake3, aggregate signatures"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [dependencies]
 hotmint-types = { workspace = true }
@@ -10,3 +12,10 @@ ruc = { workspace = true }
 blake3 = { workspace = true }
 ed25519-dalek = { workspace = true }
 rand = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "crypto_bench"
+harness = false

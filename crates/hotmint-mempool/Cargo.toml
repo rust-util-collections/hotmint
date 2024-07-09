@@ -1,9 +1,10 @@
 [package]
 name = "hotmint-mempool"
-version = "0.1.0"
-edition = "2024"
+description = "Transaction mempool with FIFO ordering and deduplication for Hotmint"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [dependencies]
-ruc = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }

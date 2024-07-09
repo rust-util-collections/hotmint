@@ -1,9 +1,9 @@
 [package]
 name = "hotmint"
-version = "0.1.0"
-edition = "2024"
 description = "A BFT consensus framework combining Tendermint's ergonomics with HotStuff-2's protocol efficiency"
-license = "GPL-3.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [lib]
 name = "hotmint"
@@ -12,6 +12,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "hotmint-node"
 path = "src/bin/node.rs"
+
+[[bin]]
+name = "hotmint-bench-e2e"
+path = "src/bin/bench_e2e.rs"
 
 [dependencies]
 hotmint-types = { workspace = true }

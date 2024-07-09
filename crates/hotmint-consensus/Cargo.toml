@@ -1,7 +1,9 @@
 [package]
 name = "hotmint-consensus"
-version = "0.1.0"
-edition = "2024"
+description = "HotStuff-2 consensus state machine and engine for Hotmint"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [dependencies]
 hotmint-types = { workspace = true }
@@ -16,3 +18,8 @@ prometheus-client = { workspace = true }
 [dev-dependencies]
 tracing-subscriber = { workspace = true }
 rand = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "consensus_bench"
+harness = false
