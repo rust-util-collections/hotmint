@@ -15,7 +15,7 @@ members = [
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0"
-repository = "https://github.com/user/hotmint"
+repository = "https://github.com/rust-util-collections/hotmint"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

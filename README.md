@@ -2,10 +2,20 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-2024_edition-orange.svg)](https://www.rust-lang.org/)
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
+[![CI](https://github.com/rust-util-collections/hotmint/actions/workflows/ci.yml/badge.svg)](https://github.com/rust-util-collections/hotmint/actions/workflows/ci.yml)
 [![HotStuff-2](https://img.shields.io/badge/protocol-HotStuff--2-purple.svg)](https://arxiv.org/abs/2301.03253)
 
-> A Rust BFT consensus framework combining Tendermint's engineering ergonomics with HotStuff-2's protocol efficiency.
+A Rust BFT consensus framework combining Tendermint's engineering ergonomics with HotStuff-2's protocol efficiency.
+
+| Feature | Progress | Status |
+|:--------|:---------|:-------|
+| Core Types & Crypto | 5/5 | ✅ |
+| Persistent Storage | 3/3 | ✅ |
+| P2P Networking | 4/4 | ✅ |
+| Full Pacemaker | 4/4 | ✅ |
+| Production Hardening | 3/3 | ✅ |
+| Application Framework | 3/3 | ✅ |
+| **Total** | **22/22** | **100%** |
 
 ## Design Goals
 
@@ -53,16 +63,12 @@ Each view v consists of 5 steps:
 
 ### View Change / Pacemaker (Paper Figure 2)
 
-Simplified Pacemaker (Phase 1):
-
 ```
-enter_view -> start view_timer(base_timeout=2s)
+enter_view -> start view_timer(base_timeout=2s, exponential backoff 1.5x, cap 30s)
 timeout    -> broadcast Wish{target_view: current+1, highest_qc}
 2f+1 wish  -> form TC (Timeout Certificate), broadcast and advance view
 receive TC or DoubleCert -> advance to corresponding view
 ```
-
-Full epoch structure and Cogsworth coordination will be implemented in later phases.
 
 ## Architecture
 
@@ -251,61 +257,20 @@ Message dispatch:
 - Quorum threshold: ceil(2n/3) (for n=4, quorum=3, f=1)
 - Leader selection: `view.as_u64() % n` round-robin
 
-## Technology Choices
+## Technology Stack
 
-| Component | Current (Phase 1) | Production Target |
-|:----------|:-------------------|:------------------|
-| Signatures | Ed25519 (ed25519-dalek) | BLS/FROST aggregate signatures |
-| Hashing | Blake3 | Blake3 |
-| Aggregate Signatures | Bitfield + signature list | BLS threshold signatures |
-| Storage | HashMap + BTreeMap (in-memory) | vsdb MapxOrd + VerMapWithProof |
-| Networking | tokio::mpsc channels (in-process) | litep2p notification + request-response |
-| Async Runtime | Tokio | Tokio |
-| Error Handling | ruc 9.3 | ruc |
-| Serialization | serde + msgpack (rmp-serde) | serde + msgpack |
-| Logging | tracing + tracing-subscriber | tracing + prometheus-client |
-
-## Roadmap
-
-### Phase 1: Project Skeleton + Core Types + Consensus State Machine
-
-- [x] Cargo workspace structure
-- [x] Core data types (hotmint-types)
-- [x] Ed25519 signing + Blake3 hashing (hotmint-crypto)
-- [x] Consensus state machine (hotmint-consensus)
-- [x] In-process 4-node test run
-
-### Phase 2: Persistent Storage
-
-- [x] VsdbBlockStore backed by rocksdb (via vsdb MapxOrd)
-- [x] PersistentConsensusState for crash recovery
-- [x] BlockStore trait refactored to return owned values (vsdb compatible)
-
-### Phase 3: Real Networking
-
-- [x] litep2p notification protocol (broadcast messages)
-- [x] litep2p request-response protocol (directed messages)
-- [x] Message serialization via msgpack (rmp-serde)
-- [x] PeerMap for ValidatorId <-> PeerId routing
-
-### Phase 4: Full Pacemaker
-
-- [x] Exponential backoff timeout (1.5x per timeout, cap 30s)
-- [x] TC relay (rebroadcast timeout certificates with dedup)
-- [x] Reset-on-progress for successful view transitions
-- [x] Epoch and EpochNumber types for validator set change boundaries
-
-### Phase 5: Production Hardening
-
-- [x] Prometheus metrics (blocks, votes, QCs, timeouts, view duration histogram)
-- [x] Byzantine tolerance test (1-fault with 3/4 validators)
-- [x] 27 unit + integration tests across all crates
-
-### Phase 6: Application Framework
-
-- [x] ABCI-like Application trait (begin_block, deliver_tx, end_block, on_commit, query)
-- [x] Mempool module (FIFO with dedup, size/byte limits, payload encoding)
-- [x] JSON-RPC API (status, submit_tx endpoints over TCP)
+| Component | Implementation |
+|:----------|:---------------|
+| Signatures | Ed25519 ([ed25519-dalek](https://crates.io/crates/ed25519-dalek)) |
+| Hashing | [Blake3](https://crates.io/crates/blake3) |
+| Aggregate Signatures | Bitfield + signature list |
+| Storage | [vsdb](https://crates.io/crates/vsdb) MapxOrd (RocksDB) |
+| Networking | [litep2p](https://crates.io/crates/litep2p) notification + request-response |
+| Async Runtime | [Tokio](https://crates.io/crates/tokio) |
+| Error Handling | [ruc](https://crates.io/crates/ruc) |
+| Serialization | [serde](https://crates.io/crates/serde) + [msgpack](https://crates.io/crates/rmp-serde) |
+| Metrics | [prometheus-client](https://crates.io/crates/prometheus-client) |
+| Logging | [tracing](https://crates.io/crates/tracing) |
 
 ## References
 
@@ -321,7 +286,7 @@ Add `hotmint` as a dependency in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-hotmint = { git = "https://github.com/user/hotmint" }
+hotmint = { git = "https://github.com/rust-util-collections/hotmint" }
 ```
 
 Implement the `Application` trait and wire up your consensus node:
