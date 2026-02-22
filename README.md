@@ -29,233 +29,41 @@ Hotmint is a BFT consensus framework built from scratch. It retains the clean, m
 - **Networking**: [litep2p](https://crates.io/crates/litep2p) as the P2P foundation, lighter weight than libp2p
 - **Error handling**: [ruc](https://crates.io/crates/ruc) chained error tracing
 
-## Protocol Overview
+## Protocol
 
-Hotmint implements the core protocol from the HotStuff-2 paper ([arXiv:2301.03253](https://arxiv.org/abs/2301.03253)).
-
-### Two-Chain Commit Rule
-
-HotStuff-2's key innovation is reducing confirmation from three chains to two:
+Hotmint implements the HotStuff-2 two-chain commit protocol ([arXiv:2301.03253](https://arxiv.org/abs/2301.03253)):
 
 ```
-B_{k-1}  <--  C_v(B_{k-1})  <--  C_v(C_v(B_{k-1}))
-  Block         QC (Quorum Cert)    Double Cert -> triggers commit
+Block  <──  QC (2f+1 votes)  <──  Double Cert (2f+1 votes on QC)  ──>  Commit
 ```
 
-When a block receives a QC (aggregate signature from 2f+1 validators), and then that QC itself receives 2f+1 votes forming a "Double Certificate", the block and all its uncommitted ancestors are safely committed.
+Each view follows a 5-step protocol: Enter → Propose → Vote → Prepare (QC) → Vote2. A double certificate triggers commit of the block and all uncommitted ancestors. View changes use a timeout + wish + TC mechanism with exponential backoff.
 
-### Steady-State View Protocol (Paper Figure 1)
-
-Each view v consists of 5 steps:
-
-| Step | Name | Role | Description |
-|:-----|:-----|:-----|:------------|
-| 1 | Enter | All | Enter view: Leader waits for status or proposes directly; Replica sends status |
-| 2 | Propose | Leader | Broadcast proposal `<propose, B_k, v, C_{v'}(B_{k-1})>` with justify QC |
-| 3 | Vote & Commit | Replica | Safety check (justify.rank >= locked_qc.rank), vote if passed, check for commits |
-| 4 | Prepare | Leader | Collect 2f+1 votes to form QC, broadcast `<prepare, C_v(B_k)>` |
-| 5 | Vote2 | Replica | Update lock to C_v(B_k), send vote2 to next view's Leader |
-
-### Safety Rules
-
-- **Locking rule**: Replica updates its lock upon receiving Prepare (QC); voting requires justify.rank >= locked_qc.rank
-- **Commit rule**: Double certificate `C_v(C_v(B_k))` triggers commit, committing all uncommitted ancestors in height order
-
-### View Change / Pacemaker (Paper Figure 2)
-
-```
-enter_view -> start view_timer(base_timeout=2s, exponential backoff 1.5x, cap 30s)
-timeout    -> broadcast Wish{target_view: current+1, highest_qc}
-2f+1 wish  -> form TC (Timeout Certificate), broadcast and advance view
-receive TC or DoubleCert -> advance to corresponding view
-```
+📖 **[Full protocol specification →](docs/protocol.md)**
 
 ## Architecture
 
-### Workspace Layout
-
 ```
-hotmint/
-├── Cargo.toml                     # workspace root
-├── crates/
-│   ├── hotmint-types/             # core data types (minimal dependencies)
-│   │   └── src/
-│   │       ├── block.rs           # Block, BlockHash, Height
-│   │       ├── vote.rs            # Vote, VoteType
-│   │       ├── certificate.rs     # QuorumCertificate, DoubleCertificate, TimeoutCertificate
-│   │       ├── view.rs            # ViewNumber
-│   │       ├── message.rs         # ConsensusMessage — wire protocol
-│   │       ├── validator.rs       # ValidatorId, ValidatorSet, ValidatorInfo
-│   │       └── crypto.rs          # Signature, PublicKey, AggregateSignature, Signer/Verifier traits
-│   │
-│   ├── hotmint-crypto/            # concrete cryptography implementations
-│   │   └── src/
-│   │       ├── signer.rs          # Ed25519Signer (sign/verify)
-│   │       ├── aggregate.rs       # simple aggregate signatures (bitfield + signature list)
-│   │       └── hash.rs            # Blake3 block hashing
-│   │
-│   ├── hotmint-consensus/         # consensus state machine
-│   │   └── src/
-│   │       ├── engine.rs          # ConsensusEngine — tokio::select! event loop
-│   │       ├── state.rs           # ConsensusState — mutable consensus state
-│   │       ├── view_protocol.rs   # Paper Figure 1: steady-state view protocol
-│   │       ├── pacemaker.rs       # Paper Figure 2: timeout / view change with backoff
-│   │       ├── leader.rs          # round-robin leader election (v mod n)
-│   │       ├── commit.rs          # two-chain commit rule
-│   │       ├── vote_collector.rs  # vote collection and QC formation
-│   │       ├── metrics.rs         # Prometheus metrics
-│   │       ├── store.rs           # BlockStore trait + in-memory stub
-│   │       ├── network.rs         # NetworkSink trait + channel stub
-│   │       ├── application.rs     # ABCI-like Application trait
-│   │       └── error.rs           # ConsensusError
-│   │
-│   ├── hotmint-storage/           # persistent storage (vsdb/rocksdb)
-│   │   └── src/
-│   │       ├── block_store.rs     # VsdbBlockStore
-│   │       └── consensus_state.rs # PersistentConsensusState
-│   │
-│   ├── hotmint-network/           # P2P networking (litep2p)
-│   │   └── src/
-│   │       └── service.rs         # NetworkService, Litep2pNetworkSink, PeerMap
-│   │
-│   ├── hotmint-mempool/           # transaction mempool
-│   │   └── src/lib.rs             # Mempool (FIFO, dedup, payload encoding)
-│   │
-│   ├── hotmint-api/               # JSON-RPC API
-│   │   └── src/
-│   │       ├── rpc.rs             # RpcServer over TCP
-│   │       └── types.rs           # RpcRequest, RpcResponse, StatusInfo
-│   │
-│   └── hotmint/                   # top-level library crate (facade)
-│       └── src/
-│           ├── lib.rs             # re-exports all sub-crates + prelude
-│           └── bin/
-│               └── node.rs        # [[bin]] demo: 4 in-process validators
+hotmint (library facade — re-exports everything)
+  ├── hotmint-types      core data types (Block, QC, Vote, ValidatorSet, ...)
+  ├── hotmint-crypto     Ed25519 signing + Blake3 hashing
+  ├── hotmint-consensus  consensus state machine (engine, pacemaker, vote collector)
+  ├── hotmint-storage    persistent storage (vsdb/RocksDB)
+  ├── hotmint-network    P2P networking (litep2p)
+  ├── hotmint-mempool    transaction mempool (FIFO, dedup)
+  └── hotmint-api        JSON-RPC server
 ```
 
-### Dependency Graph
+The consensus engine is decoupled from all I/O through four pluggable traits:
 
-```
-hotmint (library facade)
-  ├── hotmint-consensus -> hotmint-types
-  ├── hotmint-crypto    -> hotmint-types
-  ├── hotmint-storage   -> hotmint-consensus, vsdb
-  ├── hotmint-network   -> hotmint-consensus, litep2p
-  ├── hotmint-mempool
-  └── hotmint-api       -> hotmint-mempool
-```
+| Trait | Purpose | Built-in Implementations |
+|:------|:--------|:-------------------------|
+| `Application` | ABCI-like app lifecycle | `NoopApplication` |
+| `BlockStore` | Block persistence | `MemoryBlockStore`, `VsdbBlockStore` |
+| `NetworkSink` | Message transport | `ChannelNetwork`, `Litep2pNetworkSink` |
+| `Signer` | Cryptographic signing | `Ed25519Signer` |
 
-The consensus engine communicates with the network layer via `tokio::mpsc` channels and has no direct dependency on any networking crate.
-
-### Core Trait Abstractions
-
-```rust
-// Cryptographic signing
-trait Signer: Send + Sync {
-    fn sign(&self, message: &[u8]) -> Signature;
-    fn public_key(&self) -> PublicKey;
-    fn validator_id(&self) -> ValidatorId;
-}
-
-// Block persistence (returns owned values for vsdb compatibility)
-trait BlockStore: Send + Sync {
-    fn put_block(&mut self, block: Block);
-    fn get_block(&self, hash: &BlockHash) -> Option<Block>;
-    fn get_block_by_height(&self, h: Height) -> Option<Block>;
-}
-
-// Network transport
-trait NetworkSink: Send + Sync {
-    fn broadcast(&self, msg: ConsensusMessage);
-    fn send_to(&self, target: ValidatorId, msg: ConsensusMessage);
-}
-
-// Application layer (ABCI-like lifecycle)
-trait Application: Send + Sync {
-    fn create_payload(&self) -> Vec<u8>;
-    fn validate_block(&self, block: &Block) -> bool;
-    fn validate_tx(&self, tx: &[u8]) -> bool;
-    fn begin_block(&self, height: Height, view: ViewNumber) -> Result<()>;
-    fn deliver_tx(&self, tx: &[u8]) -> Result<()>;
-    fn end_block(&self, height: Height) -> Result<()>;
-    fn on_commit(&self, block: &Block) -> Result<()>;
-    fn query(&self, path: &str, data: &[u8]) -> Result<Vec<u8>>;
-}
-```
-
-Each trait provides default implementations and has a stub (in-memory store, channel network, no-op app) for development use.
-
-## Core Types
-
-| Type | Paper Notation | Description |
-|:-----|:---------------|:------------|
-| `ViewNumber(u64)` | v | Monotonically increasing view number |
-| `Height(u64)` | k | Block height in the committed chain |
-| `BlockHash([u8; 32])` | h_k | 32-byte Blake3 hash |
-| `Block` | B_k := (b_k, h_{k-1}) | Block: height + parent hash + view + proposer + payload |
-| `QuorumCertificate` | C_v(B_k) | Aggregate signature of 2f+1 validators on the block hash |
-| `DoubleCertificate` | C_v(C_v(B_k)) | QC of a QC, triggers commit |
-| `TimeoutCertificate` | TC_v | Timeout proof from 2f+1 validators, carrying their highest_qc |
-| `Vote` | — | Vote: block hash + view + validator + signature + type (Vote/Vote2) |
-| `ValidatorSet` | — | Validator set with quorum threshold calculation and leader selection |
-
-### ConsensusMessage (Wire Protocol)
-
-```rust
-enum ConsensusMessage {
-    Propose { block, justify: QC, double_cert: Option<DC>, signature },
-    VoteMsg(Vote),           // phase-1 vote -> current Leader
-    Prepare { certificate: QC, signature },
-    Vote2Msg(Vote),          // phase-2 vote -> next Leader
-    Wish { target_view, validator, highest_qc, signature },
-    TimeoutCert(TC),
-    StatusCert { locked_qc, validator, signature },
-}
-```
-
-## Consensus Engine
-
-### State Machine
-
-```rust
-struct ConsensusState {
-    validator_id: ValidatorId,
-    validator_set: ValidatorSet,
-    current_view: ViewNumber,
-    role: ViewRole,              // Leader / Replica
-    step: ViewStep,              // Entered -> Proposed/Voted -> Prepared -> SentVote2 -> Done
-    locked_qc: Option<QC>,      // highest locked QC
-    highest_double_cert: Option<DoubleCert>,
-    highest_qc: Option<QC>,
-    last_committed_height: Height,
-}
-```
-
-### Event Loop
-
-```rust
-loop {
-    tokio::select! {
-        Some((sender, msg)) = msg_rx.recv() => handle_message(sender, msg),
-        _ = pacemaker.view_timer => handle_timeout(),
-    }
-}
-```
-
-Message dispatch:
-- `Propose` -> `view_protocol::on_proposal()` -> safety check + vote
-- `VoteMsg` -> `vote_collector::add_vote()` -> on quorum: `on_qc_formed()`
-- `Prepare` -> `view_protocol::on_prepare()` -> update lock + send vote2
-- `Vote2Msg` -> `vote_collector::add_vote()` -> on quorum: `on_double_cert_formed()` -> commit
-- `Wish` -> `pacemaker::add_wish()` -> on quorum: form TC -> advance view
-- `TimeoutCert` -> advance view
-- `StatusCert` -> Leader collects status then proposes
-
-### ValidatorSet and Quorum
-
-- n = total validators, f = floor((n-1)/3) max Byzantine
-- Quorum threshold: ceil(2n/3) (for n=4, quorum=3, f=1)
-- Leader selection: `view.as_u64() % n` round-robin
+📖 **[Architecture details →](docs/architecture.md)** · **[Core types reference →](docs/types.md)**
 
 ## Technology Stack
 
@@ -263,22 +71,47 @@ Message dispatch:
 |:----------|:---------------|
 | Signatures | Ed25519 ([ed25519-dalek](https://crates.io/crates/ed25519-dalek)) |
 | Hashing | [Blake3](https://crates.io/crates/blake3) |
-| Aggregate Signatures | Bitfield + signature list |
 | Storage | [vsdb](https://crates.io/crates/vsdb) MapxOrd (RocksDB) |
-| Networking | [litep2p](https://crates.io/crates/litep2p) notification + request-response |
+| Networking | [litep2p](https://crates.io/crates/litep2p) |
 | Async Runtime | [Tokio](https://crates.io/crates/tokio) |
 | Error Handling | [ruc](https://crates.io/crates/ruc) |
 | Serialization | [serde](https://crates.io/crates/serde) + [msgpack](https://crates.io/crates/rmp-serde) |
 | Metrics | [prometheus-client](https://crates.io/crates/prometheus-client) |
-| Logging | [tracing](https://crates.io/crates/tracing) |
 
 ## References
 
-| Paper | Link | Key Contribution |
-|:------|:-----|:-----------------|
-| HotStuff-2: Optimal Two-Chain BFT (2023) | [arXiv:2301.03253](https://arxiv.org/abs/2301.03253) | Two-chain commit, simplified view change |
-| HotStuff: BFT Consensus (PODC 2019) | [arXiv:1803.05069](https://arxiv.org/abs/1803.05069) | Linear communication, pipelining |
-| Tendermint: Latest Gossip on BFT (2018) | [arXiv:1807.04938](https://arxiv.org/abs/1807.04938) | Production BFT, ABCI architecture |
+| Paper | Link |
+|:------|:-----|
+| HotStuff-2: Optimal Two-Chain BFT (2023) | [arXiv:2301.03253](https://arxiv.org/abs/2301.03253) |
+| HotStuff: BFT Consensus (PODC 2019) | [arXiv:1803.05069](https://arxiv.org/abs/1803.05069) |
+| Tendermint: Latest Gossip on BFT (2018) | [arXiv:1807.04938](https://arxiv.org/abs/1807.04938) |
+
+## Quick Start
+
+```bash
+cargo build --workspace && cargo test --workspace
+
+# run the 4-node in-process demo
+cargo run --bin hotmint-node
+```
+
+📖 **[Getting started guide →](docs/getting-started.md)**
+
+## Documentation
+
+| Guide | Description |
+|:------|:------------|
+| [Getting Started](docs/getting-started.md) | Installation, quick start, first integration |
+| [Protocol](docs/protocol.md) | HotStuff-2 two-chain commit, view protocol, pacemaker |
+| [Architecture](docs/architecture.md) | Module structure, dependency graph, design decisions |
+| [Application](docs/application.md) | `Application` trait guide with ABCI-like lifecycle |
+| [Consensus Engine](docs/consensus-engine.md) | Engine internals: state machine, event loop, vote collection |
+| [Core Types](docs/types.md) | Block, QC, DC, TC, Vote, ValidatorSet, wire protocol |
+| [Cryptography](docs/crypto.md) | Signer/Verifier traits, Ed25519, aggregate signatures |
+| [Storage](docs/storage.md) | BlockStore trait, vsdb persistence, crash recovery |
+| [Networking](docs/networking.md) | NetworkSink trait, in-memory channels, litep2p P2P |
+| [Mempool & API](docs/mempool-api.md) | Transaction mempool and JSON-RPC server |
+| [Metrics](docs/metrics.md) | Prometheus metrics and observability |
 
 ## Usage
 
@@ -287,36 +120,280 @@ Add `hotmint` as a dependency in your `Cargo.toml`:
 ```toml
 [dependencies]
 hotmint = { git = "https://github.com/rust-util-collections/hotmint" }
+tokio = { version = "1", features = ["full"] }
+ruc = "9.3"
 ```
 
-Implement the `Application` trait and wire up your consensus node:
+### Implement the Application Trait
+
+Only `on_commit` is required. The lifecycle is: `begin_block` → `deliver_tx` (×N) → `end_block` → `on_commit`.
 
 ```rust
+use ruc::*;
 use hotmint::prelude::*;
 use hotmint::consensus::application::Application;
 
 struct MyApp;
 
 impl Application for MyApp {
-    fn on_commit(&self, block: &Block) -> ruc::Result<()> {
-        // process committed block
+    fn on_commit(&self, block: &Block) -> Result<()> {
+        println!("committed block at height {}", block.height.as_u64());
         Ok(())
     }
 }
 ```
 
-## Quick Start
+Override other methods as needed:
+
+```rust
+impl Application for MyApp {
+    fn create_payload(&self) -> Vec<u8> {
+        // called when this validator is the leader;
+        // return the block payload (e.g. serialized transactions)
+        vec![]
+    }
+
+    fn validate_block(&self, block: &Block) -> bool {
+        // validate a proposed block before voting
+        !block.payload.is_empty()
+    }
+
+    fn validate_tx(&self, tx: &[u8]) -> bool {
+        // validate an individual transaction (used by mempool)
+        tx.len() <= 1024
+    }
+
+    fn begin_block(&self, height: Height, _view: ViewNumber) -> Result<()> {
+        println!("begin block at height {}", height.as_u64());
+        Ok(())
+    }
+
+    fn deliver_tx(&self, tx: &[u8]) -> Result<()> {
+        println!("deliver tx: {} bytes", tx.len());
+        Ok(())
+    }
+
+    fn end_block(&self, height: Height) -> Result<()> {
+        println!("end block at height {}", height.as_u64());
+        Ok(())
+    }
+
+    fn on_commit(&self, block: &Block) -> Result<()> {
+        println!("committed block at height {}", block.height.as_u64());
+        Ok(())
+    }
+
+    fn query(&self, path: &str, _data: &[u8]) -> Result<Vec<u8>> {
+        match path {
+            "info" => Ok(b"my-app v0.1".to_vec()),
+            _ => Err(eg!("unknown query path")),
+        }
+    }
+}
+```
+
+### Set Up Validators
+
+```rust
+use hotmint::prelude::*;
+use hotmint::crypto::Ed25519Signer;
+
+const NUM_VALIDATORS: u64 = 4;
+
+// generate keypairs
+let signers: Vec<Ed25519Signer> = (0..NUM_VALIDATORS)
+    .map(|i| Ed25519Signer::generate(ValidatorId(i)))
+    .collect();
+
+// build the validator set from public keys
+let validator_infos: Vec<ValidatorInfo> = signers
+    .iter()
+    .enumerate()
+    .map(|(i, s)| ValidatorInfo {
+        id: ValidatorId(i as u64),
+        public_key: Signer::public_key(s),
+        power: 1,
+    })
+    .collect();
+
+let validator_set = ValidatorSet::new(validator_infos);
+// quorum_threshold = ceil(2n/3), e.g. 3 out of 4
+```
+
+### Run an In-Process Multi-Node Cluster
+
+Wire up all validators connected via in-memory channels — useful for testing and development:
+
+```rust
+use std::collections::HashMap;
+use tokio::sync::mpsc;
+use hotmint::consensus::engine::ConsensusEngine;
+use hotmint::consensus::state::ConsensusState;
+use hotmint::consensus::store::MemoryBlockStore;
+use hotmint::consensus::network::ChannelNetwork;
+
+// create a message channel for each validator
+let mut receivers = HashMap::new();
+let mut all_senders = HashMap::new();
+for i in 0..NUM_VALIDATORS {
+    let (tx, rx) = mpsc::unbounded_channel();
+    receivers.insert(ValidatorId(i), rx);
+    all_senders.insert(ValidatorId(i), tx);
+}
+
+// spawn each validator
+for i in 0..NUM_VALIDATORS {
+    let vid = ValidatorId(i);
+    let rx = receivers.remove(&vid).unwrap();
+    let senders: Vec<_> = all_senders
+        .iter()
+        .map(|(&id, tx)| (id, tx.clone()))
+        .collect();
+
+    let engine = ConsensusEngine::new(
+        ConsensusState::new(vid, validator_set.clone()),
+        Box::new(MemoryBlockStore::new()),
+        Box::new(ChannelNetwork::new(vid, senders)),
+        Box::new(MyApp),
+        Box::new(signers[i as usize].clone()),
+        rx,
+    );
+
+    tokio::spawn(async move { engine.run().await });
+}
+```
+
+### Use Persistent Storage
+
+Replace the in-memory store with vsdb-backed storage for crash recovery:
+
+```rust
+use hotmint::storage::block_store::VsdbBlockStore;
+use hotmint::storage::consensus_state::PersistentConsensusState;
+
+// persistent block store (backed by RocksDB via vsdb)
+let store = VsdbBlockStore::new();
+
+// persistent consensus state (survives restarts)
+let mut persistent_state = PersistentConsensusState::new();
+
+// restore state after crash
+let mut state = ConsensusState::new(vid, validator_set.clone());
+if let Some(view) = persistent_state.load_current_view() {
+    state.current_view = view;
+}
+if let Some(qc) = persistent_state.load_locked_qc() {
+    state.locked_qc = Some(qc);
+}
+if let Some(qc) = persistent_state.load_highest_qc() {
+    state.highest_qc = Some(qc);
+}
+if let Some(h) = persistent_state.load_last_committed_height() {
+    state.last_committed_height = h;
+}
+
+let engine = ConsensusEngine::new(
+    state,
+    Box::new(store),
+    Box::new(network_sink),  // ChannelNetwork or Litep2pNetworkSink
+    Box::new(MyApp),
+    Box::new(signer),
+    msg_rx,
+);
+```
+
+📖 **[Storage guide →](docs/storage.md)**
+
+### Use Real P2P Networking
+
+Replace in-memory channels with litep2p for multi-process / multi-machine deployments:
+
+```rust
+use hotmint::network::service::{NetworkService, PeerMap};
+
+// build the peer map (ValidatorId <-> libp2p PeerId)
+let mut peer_map = PeerMap::new();
+peer_map.insert(ValidatorId(0), peer_id_0);
+peer_map.insert(ValidatorId(1), peer_id_1);
+// ...
+
+let known_addresses = vec![
+    (peer_id_0, vec!["/ip4/10.0.0.1/tcp/30000".parse().unwrap()]),
+    (peer_id_1, vec!["/ip4/10.0.0.2/tcp/30000".parse().unwrap()]),
+    // ...
+];
+
+let (net_service, network_sink, msg_rx) = NetworkService::create(
+    "/ip4/0.0.0.0/tcp/30000".parse().unwrap(),
+    peer_map,
+    known_addresses,
+).unwrap();
+
+// run the network event loop in background
+tokio::spawn(async move { net_service.run().await });
+
+// pass network_sink and msg_rx to ConsensusEngine::new(...)
+```
+
+📖 **[Networking guide →](docs/networking.md)**
+
+### Add Mempool and JSON-RPC API
+
+Accept external transactions via JSON-RPC:
+
+```rust
+use std::sync::Arc;
+use tokio::sync::watch;
+use hotmint::mempool::Mempool;
+use hotmint::api::rpc::{RpcServer, RpcState};
+
+// shared mempool (10k txs max, 1MB per tx)
+let mempool = Arc::new(Mempool::new(10_000, 1_048_576));
+
+// status channel (updated by your commit handler)
+let (status_tx, status_rx) = watch::channel((0u64, 0u64));
+
+let rpc_state = RpcState {
+    validator_id: 0,
+    mempool: mempool.clone(),
+    status_rx,
+};
+
+let server = RpcServer::bind("127.0.0.1:26657", rpc_state).await.unwrap();
+tokio::spawn(async move { server.run().await });
+```
+
+Submit transactions via JSON-RPC (newline-delimited JSON over TCP):
 
 ```bash
-# build
-cargo build --workspace
+# query node status
+echo '{"method":"status","params":{},"id":1}' | nc 127.0.0.1 26657
 
-# run tests
-cargo test --workspace
-
-# run the 4-node in-process demo
-cargo run --bin hotmint-node
+# submit a transaction (hex-encoded)
+echo '{"method":"submit_tx","params":{"tx":"deadbeef"},"id":2}' | nc 127.0.0.1 26657
 ```
+
+📖 **[Mempool & API guide →](docs/mempool-api.md)**
+
+### Collect Prometheus Metrics
+
+```rust
+use prometheus_client::registry::Registry;
+use hotmint::consensus::metrics::ConsensusMetrics;
+
+let mut registry = Registry::default();
+let metrics = ConsensusMetrics::new(&mut registry);
+
+// metrics are automatically incremented by the consensus engine:
+//   hotmint_blocks_committed, hotmint_blocks_proposed,
+//   hotmint_votes_sent, hotmint_qcs_formed,
+//   hotmint_double_certs_formed, hotmint_view_timeouts,
+//   hotmint_tcs_formed, hotmint_current_view,
+//   hotmint_current_height, hotmint_consecutive_timeouts,
+//   hotmint_view_duration_seconds
+```
+
+📖 **[Metrics guide →](docs/metrics.md)**
 
 ## License
 
