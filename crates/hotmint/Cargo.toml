@@ -4,6 +4,7 @@ description = "A BFT consensus framework combining Tendermint's ergonomics with 
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [lib]
 name = "hotmint"

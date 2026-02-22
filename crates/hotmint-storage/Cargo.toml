@@ -4,6 +4,7 @@ description = "Persistent storage backends for Hotmint (vsdb/rocksdb)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 hotmint-types = { workspace = true }

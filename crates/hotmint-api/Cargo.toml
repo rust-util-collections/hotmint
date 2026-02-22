@@ -4,6 +4,7 @@ description = "JSON-RPC API for external interaction with Hotmint nodes"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 hotmint-types = { workspace = true }

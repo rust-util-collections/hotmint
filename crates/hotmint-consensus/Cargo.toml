@@ -4,6 +4,7 @@ description = "HotStuff-2 consensus state machine and engine for Hotmint"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 hotmint-types = { workspace = true }
