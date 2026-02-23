@@ -4,7 +4,18 @@ CARGO := cargo
 export ROCKSDB_INCLUDE_DIR ?= /opt/homebrew/include
 export ROCKSDB_LIB_DIR ?= /opt/homebrew/lib
 
-.PHONY: all fmt lint build test bench bench-e2e run clean check doc
+# Publish order (topological by internal deps)
+CRATES := \
+	hotmint-types \
+	hotmint-mempool \
+	hotmint-crypto \
+	hotmint-api \
+	hotmint-consensus \
+	hotmint-storage \
+	hotmint-network \
+	hotmint
+
+.PHONY: all fmt lint build test bench bench-e2e run clean check doc update publish
 
 all: fmt lint build test
 
@@ -37,3 +48,23 @@ doc:
 
 clean:
 	$(CARGO) clean
+
+update:
+	$(CARGO) update
+
+publish:
+	@for crate in $(CRATES); do \
+		printf "Publishing $$crate... "; \
+		output=$$($(CARGO) publish -p $$crate 2>&1); \
+		status=$$?; \
+		if [ $$status -eq 0 ]; then \
+			echo "ok"; \
+			sleep 2; \
+		elif echo "$$output" | grep -q "already uploaded"; then \
+			echo "skipped (already published)"; \
+		else \
+			echo "FAILED"; \
+			echo "$$output"; \
+			exit 1; \
+		fi; \
+	done
