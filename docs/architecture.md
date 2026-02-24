@@ -11,7 +11,7 @@ hotmint/
 │   ├── hotmint-types/             # core data types (minimal dependencies)
 │   ├── hotmint-crypto/            # cryptography implementations
 │   ├── hotmint-consensus/         # consensus state machine
-│   ├── hotmint-storage/           # persistent storage (vsdb/rocksdb)
+│   ├── hotmint-storage/           # persistent storage (vsdb)
 │   ├── hotmint-network/           # P2P networking (litep2p)
 │   ├── hotmint-mempool/           # transaction mempool
 │   ├── hotmint-api/               # JSON-RPC API
@@ -79,7 +79,7 @@ Each trait includes an in-memory/no-op stub implementation for development use.
 
 ### hotmint-storage
 
-Production-grade persistent storage backed by vsdb (RocksDB):
+Production-grade persistent storage backed by vsdb:
 
 - `VsdbBlockStore` — implements `BlockStore` with `MapxOrd` for by-hash and by-height indexing
 - `PersistentConsensusState` — persists critical consensus state (view, locks, committed height) for crash recovery
@@ -183,4 +183,4 @@ The consensus engine receives messages through a `tokio::mpsc::UnboundedReceiver
 
 ### Why owned values in BlockStore?
 
-`BlockStore` returns `Option<Block>` (owned) rather than references. This is a deliberate choice for vsdb compatibility — vsdb stores data in RocksDB and cannot return references to in-memory data. The owned-value pattern works uniformly across both in-memory and persistent implementations.
+`BlockStore` returns `Option<Block>` (owned) rather than references. This is a deliberate choice for vsdb compatibility — vsdb stores data on disk and cannot return references to in-memory data. The owned-value pattern works uniformly across both in-memory and persistent implementations.

@@ -5,33 +5,14 @@
 
 Persistent storage backends for the [Hotmint](https://github.com/rust-util-collections/hotmint) BFT consensus framework.
 
-Implements the `BlockStore` trait from `hotmint-consensus` using [vsdb](https://crates.io/crates/vsdb) (a RocksDB-based versioned storage engine), and provides `PersistentConsensusState` for crash recovery of critical consensus state.
+Implements the `BlockStore` trait from `hotmint-consensus` using [vsdb](https://crates.io/crates/vsdb) (a high-performance embedded KV database backed by MMDB), and provides `PersistentConsensusState` for crash recovery of critical consensus state.
 
 ## Components
 
 | Component | Description |
 |:----------|:------------|
-| `VsdbBlockStore` | Persistent block storage backed by vsdb `MapxOrd` (RocksDB) |
+| `VsdbBlockStore` | Persistent block storage backed by vsdb `MapxOrd` |
 | `PersistentConsensusState` | Persists view number, locked QC, highest QC, committed height |
-
-## Prerequisites
-
-Requires RocksDB development libraries:
-
-```bash
-# macOS
-brew install rocksdb
-
-# Ubuntu
-sudo apt-get install librocksdb-dev
-```
-
-If installed in a non-standard location:
-
-```bash
-export ROCKSDB_INCLUDE_DIR=/opt/homebrew/include
-export ROCKSDB_LIB_DIR=/opt/homebrew/lib
-```
 
 ## Usage
 
@@ -78,10 +59,15 @@ if let Some(h) = pstate.load_last_committed_height() {
 
 ### Data Directory
 
-vsdb stores data in the process working directory by default. Set `VSDB_BASE_DIR` to control the location:
+vsdb stores data in the process working directory by default. Configure a custom location via environment variable or programmatically:
 
 ```bash
 export VSDB_BASE_DIR=/var/lib/hotmint/data
+```
+
+```rust
+// must be called before any vsdb operation, can only be called once
+vsdb::vsdb_set_base_dir("/var/lib/hotmint/data").unwrap();
 ```
 
 ## License

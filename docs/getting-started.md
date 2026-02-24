@@ -3,9 +3,6 @@
 ## Prerequisites
 
 - **Rust** 2024 edition (nightly or stable with edition support)
-- **RocksDB** development libraries (required by vsdb)
-  - macOS: `brew install rocksdb`
-  - Ubuntu: `sudo apt-get install librocksdb-dev`
 
 ## Installation
 
@@ -16,13 +13,6 @@ Add `hotmint` as a dependency:
 hotmint = { git = "https://github.com/rust-util-collections/hotmint" }
 tokio = { version = "1", features = ["full"] }
 ruc = "9.3"
-```
-
-If RocksDB is installed in a non-standard location, set the environment variables:
-
-```bash
-export ROCKSDB_INCLUDE_DIR=/opt/homebrew/include
-export ROCKSDB_LIB_DIR=/opt/homebrew/lib
 ```
 
 ## Quick Start

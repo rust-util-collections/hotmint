@@ -1,6 +1,6 @@
 [package]
 name = "hotmint-storage"
-description = "Persistent storage backends for Hotmint (vsdb/rocksdb)"
+description = "Persistent storage backends for Hotmint (vsdb)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

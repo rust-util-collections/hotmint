@@ -1,9 +1,5 @@
 CARGO := cargo
 
-# System rocksdb (required by vsdb)
-export ROCKSDB_INCLUDE_DIR ?= /opt/homebrew/include
-export ROCKSDB_LIB_DIR ?= /opt/homebrew/lib
-
 # Publish order (topological by internal deps)
 CRATES := \
 	hotmint-types \

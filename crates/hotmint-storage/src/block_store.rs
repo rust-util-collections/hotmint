@@ -3,7 +3,7 @@ use hotmint_types::{Block, BlockHash, Height};
 use tracing::debug;
 use vsdb::MapxOrd;
 
-/// Persistent block store backed by vsdb (rocksdb)
+/// Persistent block store backed by vsdb
 pub struct VsdbBlockStore {
     by_hash: MapxOrd<[u8; 32], Block>,
     by_height: MapxOrd<u64, [u8; 32]>,
