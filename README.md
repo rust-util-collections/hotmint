@@ -48,7 +48,7 @@ hotmint (library facade — re-exports everything)
   ├── hotmint-types      core data types (Block, QC, Vote, ValidatorSet, ...)
   ├── hotmint-crypto     Ed25519 signing + Blake3 hashing
   ├── hotmint-consensus  consensus state machine (engine, pacemaker, vote collector)
-  ├── hotmint-storage    persistent storage (vsdb/RocksDB)
+  ├── hotmint-storage    persistent storage (vsdb)
   ├── hotmint-network    P2P networking (litep2p)
   ├── hotmint-mempool    transaction mempool (FIFO, dedup)
   └── hotmint-api        JSON-RPC server
@@ -71,7 +71,7 @@ The consensus engine is decoupled from all I/O through four pluggable traits:
 |:----------|:---------------|
 | Signatures | Ed25519 ([ed25519-dalek](https://crates.io/crates/ed25519-dalek)) |
 | Hashing | [Blake3](https://crates.io/crates/blake3) |
-| Storage | [vsdb](https://crates.io/crates/vsdb) MapxOrd (RocksDB) |
+| Storage | [vsdb](https://crates.io/crates/vsdb) MapxOrd |
 | Networking | [litep2p](https://crates.io/crates/litep2p) |
 | Async Runtime | [Tokio](https://crates.io/crates/tokio) |
 | Error Handling | [ruc](https://crates.io/crates/ruc) |
@@ -112,6 +112,7 @@ cargo run --bin hotmint-node
 | [Networking](docs/networking.md) | NetworkSink trait, in-memory channels, litep2p P2P |
 | [Mempool & API](docs/mempool-api.md) | Transaction mempool and JSON-RPC server |
 | [Metrics](docs/metrics.md) | Prometheus metrics and observability |
+| [Production Readiness](docs/production-readiness.md) | Validator lifecycle, staking infrastructure, gap analysis |
 
 ## Usage
 
@@ -126,7 +127,7 @@ ruc = "9.3"
 
 ### Implement the Application Trait
 
-Only `on_commit` is required. The lifecycle is: `begin_block` → `deliver_tx` (×N) → `end_block` → `on_commit`.
+Only `on_commit` is required. The lifecycle is: `begin_block(ctx)` → `deliver_tx` (×N) → `end_block(ctx)` → `on_commit(block, ctx)`. All lifecycle methods receive a `BlockContext` with height, view, proposer, epoch number, and the current validator set.
 
 ```rust
 use ruc::*;
@@ -136,7 +137,7 @@ use hotmint::consensus::application::Application;
 struct MyApp;
 
 impl Application for MyApp {
-    fn on_commit(&self, block: &Block) -> Result<()> {
+    fn on_commit(&self, block: &Block, _ctx: &BlockContext) -> Result<()> {
         println!("committed block at height {}", block.height.as_u64());
         Ok(())
     }
@@ -147,13 +148,13 @@ Override other methods as needed:
 
 ```rust
 impl Application for MyApp {
-    fn create_payload(&self) -> Vec<u8> {
+    fn create_payload(&self, _ctx: &BlockContext) -> Vec<u8> {
         // called when this validator is the leader;
         // return the block payload (e.g. serialized transactions)
         vec![]
     }
 
-    fn validate_block(&self, block: &Block) -> bool {
+    fn validate_block(&self, block: &Block, _ctx: &BlockContext) -> bool {
         // validate a proposed block before voting
         !block.payload.is_empty()
     }
@@ -163,8 +164,8 @@ impl Application for MyApp {
         tx.len() <= 1024
     }
 
-    fn begin_block(&self, height: Height, _view: ViewNumber) -> Result<()> {
-        println!("begin block at height {}", height.as_u64());
+    fn begin_block(&self, ctx: &BlockContext) -> Result<()> {
+        println!("begin block at height {}", ctx.height.as_u64());
         Ok(())
     }
 
@@ -173,12 +174,12 @@ impl Application for MyApp {
         Ok(())
     }
 
-    fn end_block(&self, height: Height) -> Result<()> {
-        println!("end block at height {}", height.as_u64());
-        Ok(())
+    fn end_block(&self, ctx: &BlockContext) -> Result<EndBlockResponse> {
+        println!("end block at height {}", ctx.height.as_u64());
+        Ok(EndBlockResponse::default())
     }
 
-    fn on_commit(&self, block: &Block) -> Result<()> {
+    fn on_commit(&self, block: &Block, _ctx: &BlockContext) -> Result<()> {
         println!("committed block at height {}", block.height.as_u64());
         Ok(())
     }
@@ -271,7 +272,7 @@ Replace the in-memory store with vsdb-backed storage for crash recovery:
 use hotmint::storage::block_store::VsdbBlockStore;
 use hotmint::storage::consensus_state::PersistentConsensusState;
 
-// persistent block store (backed by RocksDB via vsdb)
+// persistent block store (backed by vsdb)
 let store = VsdbBlockStore::new();
 
 // persistent consensus state (survives restarts)
@@ -290,6 +291,9 @@ if let Some(qc) = persistent_state.load_highest_qc() {
 }
 if let Some(h) = persistent_state.load_last_committed_height() {
     state.last_committed_height = h;
+}
+if let Some(epoch) = persistent_state.load_current_epoch() {
+    state.current_epoch = epoch;
 }
 
 let engine = ConsensusEngine::new(
@@ -351,7 +355,8 @@ use hotmint::api::rpc::{RpcServer, RpcState};
 let mempool = Arc::new(Mempool::new(10_000, 1_048_576));
 
 // status channel (updated by your commit handler)
-let (status_tx, status_rx) = watch::channel((0u64, 0u64));
+// tuple: (current_view, last_committed_height, epoch)
+let (status_tx, status_rx) = watch::channel((0u64, 0u64, 0u64));
 
 let rpc_state = RpcState {
     validator_id: 0,

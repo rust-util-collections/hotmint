@@ -46,6 +46,7 @@ pub struct StatusInfo {
     pub validator_id: u64,
     pub current_view: u64,
     pub last_committed_height: u64,
+    pub epoch: u64,
     pub mempool_size: usize,
 }
 

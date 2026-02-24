@@ -7,6 +7,8 @@ use crate::network::NetworkSink;
 use crate::state::{ConsensusState, ViewRole, ViewStep};
 use crate::store::BlockStore;
 use hotmint_crypto::hash::hash_block;
+use hotmint_types::context::BlockContext;
+use hotmint_types::epoch::Epoch;
 use hotmint_types::vote::VoteType;
 use hotmint_types::*;
 use tracing::{debug, info, warn};
@@ -40,6 +42,7 @@ pub fn enter_view(
         validator = %state.validator_id,
         view = %view,
         role = ?state.role,
+        epoch = %state.current_epoch.number,
         "entering view"
     );
 
@@ -117,7 +120,15 @@ pub fn propose(
         .c(d!("parent block not found"))?;
     let height = parent.height.next();
 
-    let payload = app.create_payload();
+    let ctx = BlockContext {
+        height,
+        view: state.current_view,
+        proposer: state.validator_id,
+        epoch: state.current_epoch.number,
+        validator_set: &state.validator_set,
+    };
+
+    let payload = app.create_payload(&ctx);
 
     let mut block = Block {
         height,
@@ -153,7 +164,8 @@ pub fn propose(
     Ok(block)
 }
 
-/// Execute step (3): Replica receives proposal, validates, votes
+/// Execute step (3): Replica receives proposal, validates, votes.
+/// Returns `Option<Epoch>` if fast-forward commit triggered an epoch change.
 #[allow(clippy::too_many_arguments)]
 pub fn on_proposal(
     state: &mut ConsensusState,
@@ -164,14 +176,14 @@ pub fn on_proposal(
     network: &dyn NetworkSink,
     app: &dyn Application,
     signer: &dyn Signer,
-) -> Result<()> {
+) -> Result<Option<Epoch>> {
     if state.step != ViewStep::WaitingForProposal {
         debug!(
             validator = %state.validator_id,
             step = ?state.step,
             "ignoring proposal, not waiting"
         );
-        return Ok(());
+        return Ok(None);
     }
 
     // Safety check: justify.rank() >= locked_qc.rank()
@@ -187,7 +199,15 @@ pub fn on_proposal(
         return Err(eg!("proposal justify rank below locked QC rank"));
     }
 
-    if !app.validate_block(&block) {
+    let ctx = BlockContext {
+        height: block.height,
+        view: block.view,
+        proposer: block.proposer,
+        epoch: state.current_epoch.number,
+        validator_set: &state.validator_set,
+    };
+
+    if !app.validate_block(&block, &ctx) {
         return Err(eg!("application rejected block"));
     }
 
@@ -197,9 +217,23 @@ pub fn on_proposal(
     // Update highest QC
     state.update_highest_qc(&justify);
 
-    // Try commit if double cert present
+    // Try commit if double cert present (fast-forward)
+    let mut pending_epoch = None;
     if let Some(ref dc) = double_cert {
-        let _ = try_commit(dc, store, app, &mut state.last_committed_height);
+        match try_commit(
+            dc,
+            store,
+            app,
+            &mut state.last_committed_height,
+            &state.current_epoch,
+        ) {
+            Ok(result) => {
+                pending_epoch = result.pending_epoch;
+            }
+            Err(e) => {
+                warn!(error = %e, "try_commit failed during fast-forward in on_proposal");
+            }
+        }
     }
 
     // Vote (first phase) → send to current leader
@@ -223,7 +257,7 @@ pub fn on_proposal(
     network.send_to(leader_id, ConsensusMessage::VoteMsg(vote));
 
     state.step = ViewStep::Voted;
-    Ok(())
+    Ok(pending_epoch)
 }
 
 /// Execute step (4): Leader collected 2f+1 votes → form QC → broadcast prepare

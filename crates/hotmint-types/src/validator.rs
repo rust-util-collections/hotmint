@@ -102,6 +102,33 @@ impl ValidatorSet {
     pub fn power_of(&self, id: ValidatorId) -> u64 {
         self.get(id).map_or(0, |v| v.power)
     }
+
+    /// Apply validator updates and return a new ValidatorSet.
+    /// - `power > 0`: update existing validator's power/key, or add new validator
+    /// - `power == 0`: remove validator
+    pub fn apply_updates(
+        &self,
+        updates: &[crate::validator_update::ValidatorUpdate],
+    ) -> ValidatorSet {
+        let mut infos: Vec<ValidatorInfo> = self.validators.clone();
+
+        for update in updates {
+            if update.power == 0 {
+                infos.retain(|v| v.id != update.id);
+            } else if let Some(existing) = infos.iter_mut().find(|v| v.id == update.id) {
+                existing.power = update.power;
+                existing.public_key = update.public_key.clone();
+            } else {
+                infos.push(ValidatorInfo {
+                    id: update.id,
+                    public_key: update.public_key.clone(),
+                    power: update.power,
+                });
+            }
+        }
+
+        ValidatorSet::new(infos)
+    }
 }
 
 #[cfg(test)]
@@ -175,6 +202,48 @@ mod tests {
         assert!(vs.get(ValidatorId(99)).is_none());
         assert_eq!(vs.power_of(ValidatorId(2)), 15);
         assert_eq!(vs.power_of(ValidatorId(99)), 0);
+    }
+
+    #[test]
+    fn test_apply_updates_add_validator() {
+        let vs = make_vs(&[1, 1, 1]);
+        let updates = vec![crate::validator_update::ValidatorUpdate {
+            id: ValidatorId(3),
+            public_key: PublicKey(vec![3]),
+            power: 2,
+        }];
+        let new_vs = vs.apply_updates(&updates);
+        assert_eq!(new_vs.validator_count(), 4);
+        assert_eq!(new_vs.power_of(ValidatorId(3)), 2);
+        assert_eq!(new_vs.total_power(), 5);
+    }
+
+    #[test]
+    fn test_apply_updates_remove_validator() {
+        let vs = make_vs(&[1, 1, 1, 1]);
+        let updates = vec![crate::validator_update::ValidatorUpdate {
+            id: ValidatorId(2),
+            public_key: PublicKey(vec![2]),
+            power: 0,
+        }];
+        let new_vs = vs.apply_updates(&updates);
+        assert_eq!(new_vs.validator_count(), 3);
+        assert!(new_vs.get(ValidatorId(2)).is_none());
+        assert_eq!(new_vs.total_power(), 3);
+    }
+
+    #[test]
+    fn test_apply_updates_change_power() {
+        let vs = make_vs(&[1, 1, 1, 1]);
+        let updates = vec![crate::validator_update::ValidatorUpdate {
+            id: ValidatorId(0),
+            public_key: PublicKey(vec![0]),
+            power: 10,
+        }];
+        let new_vs = vs.apply_updates(&updates);
+        assert_eq!(new_vs.validator_count(), 4);
+        assert_eq!(new_vs.power_of(ValidatorId(0)), 10);
+        assert_eq!(new_vs.total_power(), 13);
     }
 
     #[test]

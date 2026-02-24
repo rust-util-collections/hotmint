@@ -35,12 +35,16 @@ pub struct Epoch {
 }
 
 impl Epoch {
-    pub fn genesis(validator_set: ValidatorSet) -> Self {
+    pub fn new(number: EpochNumber, start_view: ViewNumber, validator_set: ValidatorSet) -> Self {
         Self {
-            number: EpochNumber::GENESIS,
-            start_view: ViewNumber(1),
+            number,
+            start_view,
             validator_set,
         }
+    }
+
+    pub fn genesis(validator_set: ValidatorSet) -> Self {
+        Self::new(EpochNumber::GENESIS, ViewNumber(1), validator_set)
     }
 
     pub fn contains_view(&self, view: ViewNumber) -> bool {

@@ -16,6 +16,9 @@ pub struct ConsensusMetrics {
     pub current_height: Gauge,
     pub consecutive_timeouts: Gauge,
     pub view_duration_seconds: Histogram,
+    pub epoch_transitions: Counter,
+    pub equivocations_detected: Counter,
+    pub current_epoch: Gauge,
 }
 
 impl ConsensusMetrics {
@@ -87,6 +90,27 @@ impl ConsensusMetrics {
             view_duration_seconds.clone(),
         );
 
+        let epoch_transitions = Counter::default();
+        sub.register(
+            "epoch_transitions",
+            "Total epoch transitions",
+            epoch_transitions.clone(),
+        );
+
+        let equivocations_detected = Counter::default();
+        sub.register(
+            "equivocations_detected",
+            "Total equivocations detected",
+            equivocations_detected.clone(),
+        );
+
+        let current_epoch = Gauge::default();
+        sub.register(
+            "current_epoch",
+            "Current epoch number",
+            current_epoch.clone(),
+        );
+
         Self {
             blocks_committed,
             blocks_proposed,
@@ -99,6 +123,9 @@ impl ConsensusMetrics {
             current_height,
             consecutive_timeouts,
             view_duration_seconds,
+            epoch_transitions,
+            equivocations_detected,
+            current_epoch,
         }
     }
 }

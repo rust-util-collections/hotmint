@@ -20,7 +20,7 @@ struct TestApp {
 }
 
 impl Application for TestApp {
-    fn on_commit(&self, _block: &Block) -> Result<()> {
+    fn on_commit(&self, _block: &Block, _ctx: &BlockContext) -> Result<()> {
         self.commit_count.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }

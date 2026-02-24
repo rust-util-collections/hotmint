@@ -1,4 +1,4 @@
-use hotmint_types::{Height, QuorumCertificate, ViewNumber};
+use hotmint_types::{Epoch, Height, QuorumCertificate, ViewNumber};
 use serde::{Deserialize, Serialize};
 use vsdb::MapxOrd;
 
@@ -7,6 +7,7 @@ const KEY_CURRENT_VIEW: u64 = 1;
 const KEY_LOCKED_QC: u64 = 2;
 const KEY_HIGHEST_QC: u64 = 3;
 const KEY_LAST_COMMITTED_HEIGHT: u64 = 4;
+const KEY_CURRENT_EPOCH: u64 = 5;
 
 /// Persisted consensus state fields (serialized as a single blob per key)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,6 +15,7 @@ enum StateValue {
     View(ViewNumber),
     Height(Height),
     Qc(QuorumCertificate),
+    Epoch(Epoch),
 }
 
 /// Persistent consensus state store backed by vsdb
@@ -76,6 +78,18 @@ impl PersistentConsensusState {
                 StateValue::Height(h) => Some(h),
                 _ => None,
             })
+    }
+
+    pub fn save_current_epoch(&mut self, epoch: &Epoch) {
+        self.store
+            .insert(&KEY_CURRENT_EPOCH, &StateValue::Epoch(epoch.clone()));
+    }
+
+    pub fn load_current_epoch(&self) -> Option<Epoch> {
+        self.store.get(&KEY_CURRENT_EPOCH).and_then(|v| match v {
+            StateValue::Epoch(e) => Some(e),
+            _ => None,
+        })
     }
 
     pub fn flush(&self) {

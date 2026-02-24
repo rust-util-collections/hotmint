@@ -11,7 +11,7 @@
 //! - [`types`] — Core data types: `Block`, `Vote`, `QC`, `ValidatorSet`, etc.
 //! - [`crypto`] — Cryptographic primitives: Ed25519 signing, Blake3 hashing
 //! - [`consensus`] — The HotStuff-2 state machine and engine
-//! - [`storage`] — Persistent block/state storage (vsdb/rocksdb)
+//! - [`storage`] — Persistent block/state storage (vsdb)
 //! - [`network`] — P2P networking via litep2p
 //! - [`mempool`] — Transaction buffering and deduplication
 //! - [`api`] — JSON-RPC API for external interaction
@@ -26,7 +26,7 @@
 //! // Implement your application logic
 //! struct MyApp;
 //! impl Application for MyApp {
-//!     fn on_commit(&self, block: &hotmint::types::Block) -> ruc::Result<()> {
+//!     fn on_commit(&self, block: &hotmint::types::Block, _ctx: &hotmint::types::BlockContext) -> ruc::Result<()> {
 //!         println!("committed block at height {}", block.height);
 //!         Ok(())
 //!     }
@@ -44,7 +44,7 @@ pub use hotmint_crypto as crypto;
 /// (`Application`, `BlockStore`, `NetworkSink`).
 pub use hotmint_consensus as consensus;
 
-/// Persistent storage backends (vsdb/rocksdb).
+/// Persistent storage backends (vsdb).
 pub use hotmint_storage as storage;
 
 /// P2P networking via litep2p (notification + request-response protocols).
@@ -59,8 +59,9 @@ pub use hotmint_api as api;
 /// Prelude: commonly used types re-exported for convenience.
 pub mod prelude {
     pub use hotmint_types::{
-        Block, BlockHash, ConsensusMessage, DoubleCertificate, Epoch, EpochNumber, Height,
-        QuorumCertificate, Signer, TimeoutCertificate, ValidatorId, ValidatorInfo, ValidatorSet,
-        Verifier, ViewNumber, Vote, VoteType,
+        Block, BlockContext, BlockHash, ConsensusMessage, DoubleCertificate, EndBlockResponse,
+        Epoch, EpochNumber, EquivocationProof, Height, QuorumCertificate, Signer,
+        TimeoutCertificate, ValidatorId, ValidatorInfo, ValidatorSet, ValidatorUpdate, Verifier,
+        ViewNumber, Vote, VoteType,
     };
 }

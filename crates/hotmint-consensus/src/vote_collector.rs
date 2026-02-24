@@ -1,11 +1,20 @@
 use ruc::*;
 
 use hotmint_crypto::aggregate::{aggregate_votes, has_quorum};
+use hotmint_types::evidence::EquivocationProof;
 use hotmint_types::validator::ValidatorSet;
 use hotmint_types::view::ViewNumber;
 use hotmint_types::vote::{Vote, VoteType};
 use hotmint_types::{BlockHash, QuorumCertificate};
 use std::collections::HashMap;
+
+/// Result of adding a vote to the collector
+pub struct VoteResult {
+    /// QC formed if quorum was reached
+    pub qc: Option<QuorumCertificate>,
+    /// Equivocation detected (same validator, same view+type, different block)
+    pub equivocation: Option<EquivocationProof>,
+}
 
 /// Collects votes and forms QCs when quorum is reached
 pub struct VoteCollector {
@@ -26,29 +35,55 @@ impl VoteCollector {
         }
     }
 
-    /// Add a vote and check if quorum is reached. Returns QC if formed.
-    pub fn add_vote(&mut self, vs: &ValidatorSet, vote: Vote) -> Result<Option<QuorumCertificate>> {
+    /// Add a vote, detect equivocation, and check if quorum is reached.
+    pub fn add_vote(&mut self, vs: &ValidatorSet, vote: Vote) -> Result<VoteResult> {
+        // Detect equivocation: same (view, vote_type) but different block_hash
+        let mut equivocation = None;
+        for ((v, bh, vt), existing_votes) in &self.votes {
+            if *v == vote.view
+                && *vt == vote.vote_type
+                && *bh != vote.block_hash
+                && let Some(existing) =
+                    existing_votes.iter().find(|ev| ev.validator == vote.validator)
+            {
+                equivocation = Some(EquivocationProof {
+                    validator: vote.validator,
+                    view: vote.view,
+                    vote_type: vote.vote_type,
+                    block_hash_a: existing.block_hash,
+                    signature_a: existing.signature.clone(),
+                    block_hash_b: vote.block_hash,
+                    signature_b: vote.signature.clone(),
+                });
+                break;
+            }
+        }
+
+        // Standard dedup + quorum check
         let key = (vote.view, vote.block_hash, vote.vote_type);
         let votes = self.votes.entry(key).or_default();
 
-        // Dedup
         if votes.iter().any(|v| v.validator == vote.validator) {
-            return Ok(None);
+            return Ok(VoteResult {
+                qc: None,
+                equivocation,
+            });
         }
 
         votes.push(vote);
 
         let agg = aggregate_votes(vs, votes).c(d!())?;
-        if has_quorum(vs, &agg) {
-            let qc = QuorumCertificate {
+        let qc = if has_quorum(vs, &agg) {
+            Some(QuorumCertificate {
                 block_hash: key.1,
                 view: key.0,
                 aggregate_signature: agg,
-            };
-            Ok(Some(qc))
+            })
         } else {
-            Ok(None)
-        }
+            None
+        };
+
+        Ok(VoteResult { qc, equivocation })
     }
 
     pub fn clear_view(&mut self, view: ViewNumber) {
@@ -101,18 +136,16 @@ mod tests {
         let hash = BlockHash([1u8; 32]);
         let view = ViewNumber(1);
 
-        // 2 votes: no quorum yet
         let v0 = make_vote(&signers[0], view, hash, VoteType::Vote);
-        assert!(vc.add_vote(&vs, v0).unwrap().is_none());
+        assert!(vc.add_vote(&vs, v0).unwrap().qc.is_none());
 
         let v1 = make_vote(&signers[1], view, hash, VoteType::Vote);
-        assert!(vc.add_vote(&vs, v1).unwrap().is_none());
+        assert!(vc.add_vote(&vs, v1).unwrap().qc.is_none());
 
-        // 3rd vote: quorum reached (3 out of 4)
         let v2 = make_vote(&signers[2], view, hash, VoteType::Vote);
-        let qc = vc.add_vote(&vs, v2).unwrap();
-        assert!(qc.is_some());
-        let qc = qc.unwrap();
+        let result = vc.add_vote(&vs, v2).unwrap();
+        assert!(result.qc.is_some());
+        let qc = result.qc.unwrap();
         assert_eq!(qc.block_hash, hash);
         assert_eq!(qc.view, view);
     }
@@ -125,11 +158,12 @@ mod tests {
         let view = ViewNumber(1);
 
         let v0 = make_vote(&signers[0], view, hash, VoteType::Vote);
-        assert!(vc.add_vote(&vs, v0.clone()).unwrap().is_none());
+        assert!(vc.add_vote(&vs, v0).unwrap().qc.is_none());
 
-        // Same validator again
         let v0_dup = make_vote(&signers[0], view, hash, VoteType::Vote);
-        assert!(vc.add_vote(&vs, v0_dup).unwrap().is_none());
+        let result = vc.add_vote(&vs, v0_dup).unwrap();
+        assert!(result.qc.is_none());
+        assert!(result.equivocation.is_none());
     }
 
     #[test]
@@ -139,14 +173,13 @@ mod tests {
         let hash = BlockHash([3u8; 32]);
         let view = ViewNumber(1);
 
-        // 2 Vote + 1 Vote2 should NOT form a QC
         let v0 = make_vote(&signers[0], view, hash, VoteType::Vote);
         let v1 = make_vote(&signers[1], view, hash, VoteType::Vote);
         let v2 = make_vote(&signers[2], view, hash, VoteType::Vote2);
 
-        assert!(vc.add_vote(&vs, v0).unwrap().is_none());
-        assert!(vc.add_vote(&vs, v1).unwrap().is_none());
-        assert!(vc.add_vote(&vs, v2).unwrap().is_none());
+        assert!(vc.add_vote(&vs, v0).unwrap().qc.is_none());
+        assert!(vc.add_vote(&vs, v1).unwrap().qc.is_none());
+        assert!(vc.add_vote(&vs, v2).unwrap().qc.is_none());
     }
 
     #[test]
@@ -162,8 +195,48 @@ mod tests {
 
         vc.clear_view(ViewNumber(1));
 
-        // After clearing, adding 1 more vote shouldn't form QC
         let v2 = make_vote(&signers[2], ViewNumber(1), hash, VoteType::Vote);
-        assert!(vc.add_vote(&vs, v2).unwrap().is_none());
+        assert!(vc.add_vote(&vs, v2).unwrap().qc.is_none());
+    }
+
+    #[test]
+    fn test_equivocation_detection() {
+        let (vs, signers) = make_test_env();
+        let mut vc = VoteCollector::new();
+        let hash_a = BlockHash([10u8; 32]);
+        let hash_b = BlockHash([20u8; 32]);
+        let view = ViewNumber(1);
+
+        // Validator 0 votes for hash_a
+        let v0a = make_vote(&signers[0], view, hash_a, VoteType::Vote);
+        let result = vc.add_vote(&vs, v0a).unwrap();
+        assert!(result.equivocation.is_none());
+
+        // Validator 0 votes for hash_b (different block, same view) — equivocation!
+        let v0b = make_vote(&signers[0], view, hash_b, VoteType::Vote);
+        let result = vc.add_vote(&vs, v0b).unwrap();
+        assert!(result.equivocation.is_some());
+        let proof = result.equivocation.unwrap();
+        assert_eq!(proof.validator, ValidatorId(0));
+        assert_eq!(proof.view, view);
+        assert_eq!(proof.block_hash_a, hash_a);
+        assert_eq!(proof.block_hash_b, hash_b);
+    }
+
+    #[test]
+    fn test_no_false_equivocation() {
+        let (vs, signers) = make_test_env();
+        let mut vc = VoteCollector::new();
+        let hash = BlockHash([10u8; 32]);
+        let view = ViewNumber(1);
+
+        // Same validator, same hash, same view — duplicate, not equivocation
+        let v0 = make_vote(&signers[0], view, hash, VoteType::Vote);
+        vc.add_vote(&vs, v0).unwrap();
+
+        let v0_dup = make_vote(&signers[0], view, hash, VoteType::Vote);
+        let result = vc.add_vote(&vs, v0_dup).unwrap();
+        assert!(result.equivocation.is_none());
+        assert!(result.qc.is_none());
     }
 }

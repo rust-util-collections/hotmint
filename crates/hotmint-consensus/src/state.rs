@@ -1,5 +1,5 @@
 use hotmint_types::{
-    DoubleCertificate, Height, QuorumCertificate, ValidatorId, ValidatorSet, ViewNumber,
+    DoubleCertificate, Epoch, Height, QuorumCertificate, ValidatorId, ValidatorSet, ViewNumber,
 };
 
 /// Role of the validator in the current view
@@ -34,10 +34,12 @@ pub struct ConsensusState {
     pub highest_double_cert: Option<DoubleCertificate>,
     pub highest_qc: Option<QuorumCertificate>,
     pub last_committed_height: Height,
+    pub current_epoch: Epoch,
 }
 
 impl ConsensusState {
     pub fn new(validator_id: ValidatorId, validator_set: ValidatorSet) -> Self {
+        let current_epoch = Epoch::genesis(validator_set.clone());
         Self {
             validator_id,
             validator_set,
@@ -48,6 +50,7 @@ impl ConsensusState {
             highest_double_cert: None,
             highest_qc: None,
             last_committed_height: Height::GENESIS,
+            current_epoch,
         }
     }
 

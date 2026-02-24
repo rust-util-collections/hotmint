@@ -1,4 +1,4 @@
-use hotmint_types::{BlockHash, ValidatorId, ViewNumber};
+use hotmint_types::{BlockHash, EpochNumber, EquivocationProof, ValidatorId, ViewNumber};
 use std::fmt;
 
 #[derive(Debug)]
@@ -17,6 +17,11 @@ pub enum ConsensusError {
     },
     MissingBlock(BlockHash),
     NetworkError(String),
+    EpochMismatch {
+        expected: EpochNumber,
+        got: EpochNumber,
+    },
+    Equivocation(EquivocationProof),
 }
 
 impl fmt::Display for ConsensusError {
@@ -37,6 +42,16 @@ impl fmt::Display for ConsensusError {
             }
             Self::MissingBlock(h) => write!(f, "missing block {h}"),
             Self::NetworkError(s) => write!(f, "network error: {s}"),
+            Self::EpochMismatch { expected, got } => {
+                write!(f, "epoch mismatch: expected {expected}, got {got}")
+            }
+            Self::Equivocation(proof) => {
+                write!(
+                    f,
+                    "equivocation by {} in view {}",
+                    proof.validator, proof.view
+                )
+            }
         }
     }
 }

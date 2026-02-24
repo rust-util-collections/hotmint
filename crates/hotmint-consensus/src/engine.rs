@@ -10,10 +10,11 @@ use crate::store::BlockStore;
 use crate::view_protocol::{self, ViewEntryTrigger};
 use crate::vote_collector::VoteCollector;
 
+use hotmint_types::epoch::Epoch;
 use hotmint_types::vote::VoteType;
 use hotmint_types::*;
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 pub struct ConsensusEngine {
     state: ConsensusState,
@@ -28,6 +29,8 @@ pub struct ConsensusEngine {
     status_count: usize,
     /// The QC formed in this view's first voting round (used to build DoubleCert)
     current_view_qc: Option<QuorumCertificate>,
+    /// Pending epoch transition (set by try_commit, applied in advance_view_to)
+    pending_epoch: Option<Epoch>,
 }
 
 impl ConsensusEngine {
@@ -50,6 +53,7 @@ impl ConsensusEngine {
             msg_rx,
             status_count: 0,
             current_view_qc: None,
+            pending_epoch: None,
         }
     }
 
@@ -135,11 +139,17 @@ impl ConsensusEngine {
             signature,
             vote_type: VoteType::Vote,
         };
-        if let Ok(Some(formed_qc)) = self
+        match self
             .vote_collector
             .add_vote(&self.state.validator_set, vote)
         {
-            self.on_qc_formed(formed_qc);
+            Ok(result) => {
+                self.handle_equivocation(&result);
+                if let Some(qc) = result.qc {
+                    self.on_qc_formed(qc);
+                }
+            }
+            Err(e) => warn!(error = %e, "failed to add self vote"),
         }
     }
 
@@ -159,30 +169,35 @@ impl ConsensusEngine {
                 if block.view > self.state.current_view {
                     if let Some(ref dc) = double_cert {
                         // Fast-forward via double cert
-                        if let Err(e) = try_commit(
+                        match try_commit(
                             dc,
                             self.store.as_ref(),
                             self.app.as_ref(),
                             &mut self.state.last_committed_height,
+                            &self.state.current_epoch,
                         ) {
-                            warn!(error = %e, "try_commit failed during fast-forward");
+                            Ok(result) => {
+                                if result.pending_epoch.is_some() {
+                                    self.pending_epoch = result.pending_epoch;
+                                }
+                            }
+                            Err(e) => {
+                                warn!(error = %e, "try_commit failed during fast-forward");
+                            }
                         }
                         self.state.highest_double_cert = Some(dc.clone());
-                        self.advance_view_to(block.view, ViewEntryTrigger::DoubleCert(dc.clone()));
-                    } else {
-                        debug!(
-                            validator = %self.state.validator_id,
-                            block_view = %block.view,
-                            current_view = %self.state.current_view,
-                            "ignoring proposal from future view without double cert"
+                        self.advance_view_to(
+                            block.view,
+                            ViewEntryTrigger::DoubleCert(dc.clone()),
                         );
+                    } else {
                         return Ok(());
                     }
                 } else if block.view < self.state.current_view {
                     return Ok(());
                 }
 
-                view_protocol::on_proposal(
+                let maybe_pending = view_protocol::on_proposal(
                     &mut self.state,
                     block,
                     justify,
@@ -193,6 +208,10 @@ impl ConsensusEngine {
                     self.signer.as_ref(),
                 )
                 .c(d!())?;
+
+                if let Some(epoch) = maybe_pending {
+                    self.pending_epoch = Some(epoch);
+                }
             }
 
             ConsensusMessage::VoteMsg(vote) => {
@@ -206,11 +225,12 @@ impl ConsensusEngine {
                     return Ok(());
                 }
 
-                if let Some(qc) = self
+                let result = self
                     .vote_collector
                     .add_vote(&self.state.validator_set, vote)
-                    .c(d!())?
-                {
+                    .c(d!())?;
+                self.handle_equivocation(&result);
+                if let Some(qc) = result.qc {
                     self.on_qc_formed(qc);
                 }
             }
@@ -222,7 +242,6 @@ impl ConsensusEngine {
                 if certificate.view < self.state.current_view {
                     return Ok(());
                 }
-                // Accept prepare from current view
                 if certificate.view == self.state.current_view {
                     view_protocol::on_prepare(
                         &mut self.state,
@@ -231,21 +250,18 @@ impl ConsensusEngine {
                         self.signer.as_ref(),
                     );
                 }
-                // For future-view prepares, we just update our highest QC
-                // (we'll catch up via TC or next proposal)
             }
 
             ConsensusMessage::Vote2Msg(vote) => {
                 if vote.vote_type != VoteType::Vote2 {
                     return Ok(());
                 }
-                // Vote2 is sent to next leader for view+1
-                // Collect it to form double cert
-                if let Some(outer_qc) = self
+                let result = self
                     .vote_collector
                     .add_vote(&self.state.validator_set, vote)
-                    .c(d!())?
-                {
+                    .c(d!())?;
+                self.handle_equivocation(&result);
+                if let Some(outer_qc) = result.qc {
                     self.on_double_cert_formed(outer_qc);
                 }
             }
@@ -275,7 +291,6 @@ impl ConsensusEngine {
             }
 
             ConsensusMessage::TimeoutCert(tc) => {
-                // TC relay: rebroadcast if not yet relayed
                 if self.pacemaker.should_relay_tc(&tc) {
                     self.network
                         .broadcast(ConsensusMessage::TimeoutCert(tc.clone()));
@@ -304,6 +319,19 @@ impl ConsensusEngine {
             }
         }
         Ok(())
+    }
+
+    fn handle_equivocation(&self, result: &crate::vote_collector::VoteResult) {
+        if let Some(ref proof) = result.equivocation {
+            warn!(
+                validator = %proof.validator,
+                view = %proof.view,
+                "equivocation detected!"
+            );
+            if let Err(e) = self.app.on_evidence(proof) {
+                warn!(error = %e, "on_evidence callback failed");
+            }
+        }
     }
 
     fn on_qc_formed(&mut self, qc: QuorumCertificate) {
@@ -336,11 +364,17 @@ impl ConsensusEngine {
             leader::next_leader(&self.state.validator_set, self.state.current_view);
         if next_leader_id == self.state.validator_id {
             // We are the next leader, collect vote2 locally
-            if let Ok(Some(outer_qc)) = self
+            match self
                 .vote_collector
                 .add_vote(&self.state.validator_set, vote)
             {
-                self.on_double_cert_formed(outer_qc);
+                Ok(result) => {
+                    self.handle_equivocation(&result);
+                    if let Some(outer_qc) = result.qc {
+                        self.on_double_cert_formed(outer_qc);
+                    }
+                }
+                Err(e) => warn!(error = %e, "failed to add self vote2"),
             }
         } else {
             self.network
@@ -380,19 +414,26 @@ impl ConsensusEngine {
         );
 
         // Commit
-        if let Err(e) = try_commit(
+        match try_commit(
             &dc,
             self.store.as_ref(),
             self.app.as_ref(),
             &mut self.state.last_committed_height,
+            &self.state.current_epoch,
         ) {
-            warn!(error = %e, "try_commit failed in double cert handler");
+            Ok(result) => {
+                if result.pending_epoch.is_some() {
+                    self.pending_epoch = result.pending_epoch;
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "try_commit failed in double cert handler");
+            }
         }
 
         self.state.highest_double_cert = Some(dc.clone());
 
         // Advance to next view — as new leader, include DC in proposal
-        // so other validators can catch up
         self.advance_view(ViewEntryTrigger::DoubleCert(dc));
     }
 
@@ -458,6 +499,24 @@ impl ConsensusEngine {
         self.pacemaker.clear_view(self.state.current_view);
         self.status_count = 0;
         self.current_view_qc = None;
+
+        // Epoch transition: apply pending validator set change before entering new view
+        if let Some(mut new_epoch) = self.pending_epoch.take() {
+            new_epoch.start_view = new_view;
+            info!(
+                validator = %self.state.validator_id,
+                old_epoch = %self.state.current_epoch.number,
+                new_epoch = %new_epoch.number,
+                start_view = %new_view,
+                validators = new_epoch.validator_set.validator_count(),
+                "epoch transition"
+            );
+            self.state.validator_set = new_epoch.validator_set.clone();
+            self.state.current_epoch = new_epoch;
+            // Full clear: old votes/wishes are from the previous epoch's validator set
+            self.vote_collector = VoteCollector::new();
+            self.pacemaker = Pacemaker::new();
+        }
 
         view_protocol::enter_view(
             &mut self.state,

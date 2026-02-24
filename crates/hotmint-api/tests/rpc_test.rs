@@ -9,7 +9,7 @@ use tokio::sync::watch;
 
 async fn setup_server() -> (String, tokio::task::JoinHandle<()>) {
     let mempool = Arc::new(Mempool::new(100, 1024));
-    let (_status_tx, status_rx) = watch::channel((1u64, 0u64));
+    let (_status_tx, status_rx) = watch::channel((1u64, 0u64, 0u64));
 
     let state = RpcState {
         validator_id: 42,

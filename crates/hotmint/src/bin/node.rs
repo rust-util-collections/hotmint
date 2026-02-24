@@ -21,7 +21,7 @@ struct CountingApp {
 }
 
 impl Application for CountingApp {
-    fn on_commit(&self, block: &Block) -> Result<()> {
+    fn on_commit(&self, block: &Block, _ctx: &BlockContext) -> Result<()> {
         let count = self.commit_count.fetch_add(1, Ordering::Relaxed) + 1;
         info!(
             validator = %self.validator_id,

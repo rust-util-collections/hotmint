@@ -13,7 +13,7 @@ use tracing::{info, warn};
 pub struct RpcState {
     pub validator_id: u64,
     pub mempool: Arc<Mempool>,
-    pub status_rx: watch::Receiver<(u64, u64)>, // (current_view, last_committed_height)
+    pub status_rx: watch::Receiver<(u64, u64, u64)>, // (current_view, last_committed_height, epoch)
 }
 
 /// Simple JSON-RPC server over TCP (one JSON object per line)
@@ -74,11 +74,12 @@ async fn handle_request(state: &RpcState, line: &str) -> RpcResponse {
 
     match req.method.as_str() {
         "status" => {
-            let (view, height) = *state.status_rx.borrow();
+            let (view, height, epoch) = *state.status_rx.borrow();
             let info = StatusInfo {
                 validator_id: state.validator_id,
                 current_view: view,
                 last_committed_height: height,
+                epoch,
                 mempool_size: state.mempool.size().await,
             };
             match serde_json::to_value(info) {

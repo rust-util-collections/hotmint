@@ -31,7 +31,7 @@ struct BenchApp {
 }
 
 impl Application for BenchApp {
-    fn on_commit(&self, _block: &Block) -> Result<()> {
+    fn on_commit(&self, _block: &Block, _ctx: &BlockContext) -> Result<()> {
         self.commit_count.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }

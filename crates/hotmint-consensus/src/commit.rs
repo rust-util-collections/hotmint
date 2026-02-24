@@ -2,24 +2,57 @@ use ruc::*;
 
 use crate::application::Application;
 use crate::store::BlockStore;
+use hotmint_types::context::BlockContext;
+use hotmint_types::epoch::Epoch;
 use hotmint_types::{Block, BlockHash, DoubleCertificate, Height};
 use tracing::info;
 
+/// Result of a commit operation
+pub struct CommitResult {
+    pub committed_blocks: Vec<Block>,
+    /// If an epoch transition was triggered by end_block, the new epoch (start_view is placeholder)
+    pub pending_epoch: Option<Epoch>,
+}
+
+/// Decode length-prefixed transactions from a block payload.
+fn decode_payload(payload: &[u8]) -> Vec<&[u8]> {
+    let mut txs = Vec::new();
+    let mut offset = 0;
+    while offset + 4 <= payload.len() {
+        let len =
+            u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+        offset += 4;
+        if offset + len > payload.len() {
+            break;
+        }
+        txs.push(&payload[offset..offset + len]);
+        offset += len;
+    }
+    txs
+}
+
 /// Execute the two-chain commit rule:
-/// When we get C_v(C_v(B_k)), commit the inner QC's block and all uncommitted ancestors
+/// When we get C_v(C_v(B_k)), commit the inner QC's block and all uncommitted ancestors.
+///
+/// For each committed block, runs the full application lifecycle:
+/// begin_block → deliver_tx (×N) → end_block → on_commit
 pub fn try_commit(
     double_cert: &DoubleCertificate,
     store: &dyn BlockStore,
     app: &dyn Application,
     last_committed_height: &mut Height,
-) -> Result<Vec<Block>> {
+    current_epoch: &Epoch,
+) -> Result<CommitResult> {
     let commit_hash = double_cert.inner_qc.block_hash;
     let commit_block = store
         .get_block(&commit_hash)
         .c(d!("block to commit not found"))?;
 
     if commit_block.height <= *last_committed_height {
-        return Ok(vec![]);
+        return Ok(CommitResult {
+            committed_blocks: vec![],
+            pending_epoch: None,
+        });
     }
 
     // Collect all uncommitted ancestors (from highest to lowest)
@@ -43,13 +76,49 @@ pub fn try_commit(
     // Commit from lowest height to highest
     to_commit.reverse();
 
+    let mut pending_epoch = None;
+
     for block in &to_commit {
+        let ctx = BlockContext {
+            height: block.height,
+            view: block.view,
+            proposer: block.proposer,
+            epoch: current_epoch.number,
+            validator_set: &current_epoch.validator_set,
+        };
+
         info!(height = block.height.as_u64(), hash = %block.hash, "committing block");
-        app.on_commit(block).c(d!("application commit failed"))?;
+
+        app.begin_block(&ctx).c(d!("begin_block failed"))?;
+
+        for tx in decode_payload(&block.payload) {
+            app.deliver_tx(tx).c(d!("deliver_tx failed"))?;
+        }
+
+        let response = app.end_block(&ctx).c(d!("end_block failed"))?;
+
+        app.on_commit(block, &ctx)
+            .c(d!("application commit failed"))?;
+
+        if !response.validator_updates.is_empty() {
+            let new_vs = current_epoch
+                .validator_set
+                .apply_updates(&response.validator_updates);
+            pending_epoch = Some(Epoch::new(
+                current_epoch.number.next(),
+                // Placeholder — engine sets the real start_view in advance_view_to
+                hotmint_types::ViewNumber::GENESIS,
+                new_vs,
+            ));
+        }
+
         *last_committed_height = block.height;
     }
 
-    Ok(to_commit)
+    Ok(CommitResult {
+        committed_blocks: to_commit,
+        pending_epoch,
+    })
 }
 
 #[cfg(test)]
@@ -58,6 +127,8 @@ mod tests {
     use crate::application::NoopApplication;
     use crate::store::MemoryBlockStore;
     use hotmint_types::{AggregateSignature, QuorumCertificate, ValidatorId, ViewNumber};
+    use hotmint_types::validator::{ValidatorInfo, ValidatorSet};
+    use hotmint_types::crypto::PublicKey;
 
     fn make_block(height: u64, parent: BlockHash) -> Block {
         let hash = BlockHash([height as u8; 32]);
@@ -79,10 +150,20 @@ mod tests {
         }
     }
 
+    fn make_epoch() -> Epoch {
+        let vs = ValidatorSet::new(vec![ValidatorInfo {
+            id: ValidatorId(0),
+            public_key: PublicKey(vec![0]),
+            power: 1,
+        }]);
+        Epoch::genesis(vs)
+    }
+
     #[test]
     fn test_commit_single_block() {
         let mut store = MemoryBlockStore::new();
         let app = NoopApplication;
+        let epoch = make_epoch();
         let b1 = make_block(1, BlockHash::GENESIS);
         store.put_block(b1.clone());
 
@@ -92,16 +173,18 @@ mod tests {
         };
 
         let mut last = Height::GENESIS;
-        let committed = try_commit(&dc, &store, &app, &mut last).unwrap();
-        assert_eq!(committed.len(), 1);
-        assert_eq!(committed[0].height, Height(1));
+        let result = try_commit(&dc, &store, &app, &mut last, &epoch).unwrap();
+        assert_eq!(result.committed_blocks.len(), 1);
+        assert_eq!(result.committed_blocks[0].height, Height(1));
         assert_eq!(last, Height(1));
+        assert!(result.pending_epoch.is_none());
     }
 
     #[test]
     fn test_commit_chain_of_blocks() {
         let mut store = MemoryBlockStore::new();
         let app = NoopApplication;
+        let epoch = make_epoch();
         let b1 = make_block(1, BlockHash::GENESIS);
         let b2 = make_block(2, b1.hash);
         let b3 = make_block(3, b2.hash);
@@ -115,11 +198,11 @@ mod tests {
         };
 
         let mut last = Height::GENESIS;
-        let committed = try_commit(&dc, &store, &app, &mut last).unwrap();
-        assert_eq!(committed.len(), 3);
-        assert_eq!(committed[0].height, Height(1));
-        assert_eq!(committed[1].height, Height(2));
-        assert_eq!(committed[2].height, Height(3));
+        let result = try_commit(&dc, &store, &app, &mut last, &epoch).unwrap();
+        assert_eq!(result.committed_blocks.len(), 3);
+        assert_eq!(result.committed_blocks[0].height, Height(1));
+        assert_eq!(result.committed_blocks[1].height, Height(2));
+        assert_eq!(result.committed_blocks[2].height, Height(3));
         assert_eq!(last, Height(3));
     }
 
@@ -127,6 +210,7 @@ mod tests {
     fn test_commit_already_committed() {
         let mut store = MemoryBlockStore::new();
         let app = NoopApplication;
+        let epoch = make_epoch();
         let b1 = make_block(1, BlockHash::GENESIS);
         store.put_block(b1.clone());
 
@@ -135,15 +219,16 @@ mod tests {
             outer_qc: make_qc(b1.hash, 1),
         };
 
-        let mut last = Height(1); // already committed
-        let committed = try_commit(&dc, &store, &app, &mut last).unwrap();
-        assert!(committed.is_empty());
+        let mut last = Height(1);
+        let result = try_commit(&dc, &store, &app, &mut last, &epoch).unwrap();
+        assert!(result.committed_blocks.is_empty());
     }
 
     #[test]
     fn test_commit_partial_chain() {
         let mut store = MemoryBlockStore::new();
         let app = NoopApplication;
+        let epoch = make_epoch();
         let b1 = make_block(1, BlockHash::GENESIS);
         let b2 = make_block(2, b1.hash);
         let b3 = make_block(3, b2.hash);
@@ -156,22 +241,45 @@ mod tests {
             outer_qc: make_qc(b3.hash, 3),
         };
 
-        let mut last = Height(1); // b1 already committed
-        let committed = try_commit(&dc, &store, &app, &mut last).unwrap();
-        assert_eq!(committed.len(), 2); // only b2 and b3
-        assert_eq!(committed[0].height, Height(2));
-        assert_eq!(committed[1].height, Height(3));
+        let mut last = Height(1);
+        let result = try_commit(&dc, &store, &app, &mut last, &epoch).unwrap();
+        assert_eq!(result.committed_blocks.len(), 2);
+        assert_eq!(result.committed_blocks[0].height, Height(2));
+        assert_eq!(result.committed_blocks[1].height, Height(3));
     }
 
     #[test]
     fn test_commit_missing_block() {
         let store = MemoryBlockStore::new();
         let app = NoopApplication;
+        let epoch = make_epoch();
         let dc = DoubleCertificate {
             inner_qc: make_qc(BlockHash([99u8; 32]), 1),
             outer_qc: make_qc(BlockHash([99u8; 32]), 1),
         };
         let mut last = Height::GENESIS;
-        assert!(try_commit(&dc, &store, &app, &mut last).is_err());
+        assert!(try_commit(&dc, &store, &app, &mut last, &epoch).is_err());
+    }
+
+    #[test]
+    fn test_decode_payload_empty() {
+        assert!(decode_payload(&[]).is_empty());
+    }
+
+    #[test]
+    fn test_decode_payload_roundtrip() {
+        // Encode: 4-byte LE length prefix + data
+        let mut payload = Vec::new();
+        let tx1 = b"hello";
+        let tx2 = b"world";
+        payload.extend_from_slice(&(tx1.len() as u32).to_le_bytes());
+        payload.extend_from_slice(tx1);
+        payload.extend_from_slice(&(tx2.len() as u32).to_le_bytes());
+        payload.extend_from_slice(tx2);
+
+        let txs = decode_payload(&payload);
+        assert_eq!(txs.len(), 2);
+        assert_eq!(txs[0], b"hello");
+        assert_eq!(txs[1], b"world");
     }
 }
