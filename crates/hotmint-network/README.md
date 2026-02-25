@@ -5,7 +5,7 @@
 
 P2P networking layer for the [Hotmint](https://github.com/rust-util-collections/hotmint) BFT consensus framework.
 
-Implements the `NetworkSink` trait from `hotmint-consensus` using [litep2p](https://crates.io/crates/litep2p) for real multi-process / multi-machine deployments. Messages are serialized with MessagePack.
+Implements the `NetworkSink` trait from `hotmint-consensus` using [litep2p](https://crates.io/crates/litep2p) for real multi-process / multi-machine deployments. Messages are serialized with CBOR.
 
 ## Sub-Protocols
 
@@ -49,9 +49,12 @@ let (net_service, network_sink, msg_rx) = NetworkService::create(
 tokio::spawn(async move { net_service.run().await });
 
 // pass network_sink and msg_rx to ConsensusEngine::new()
+use std::sync::{Arc, RwLock};
+
+let shared_store = Arc::new(RwLock::new(Box::new(store) as Box<dyn hotmint_consensus::store::BlockStore>));
 let engine = ConsensusEngine::new(
     state,
-    Box::new(store),
+    shared_store,
     Box::new(network_sink),
     Box::new(app),
     Box::new(signer),

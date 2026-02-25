@@ -263,4 +263,4 @@ pub enum ConsensusMessage {
 }
 ```
 
-All messages are serialized with MessagePack (`rmp-serde`) for network transport.
+All messages are serialized with CBOR (`serde_cbor_2`) for network transport.

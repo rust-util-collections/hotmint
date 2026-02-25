@@ -62,12 +62,12 @@ struct MyApp {
 }
 
 impl Application for MyApp {
-    fn create_payload(&self) -> Vec<u8> {
+    fn create_payload(&self, _ctx: &hotmint_types::context::BlockContext) -> Vec<u8> {
         let rt = tokio::runtime::Handle::current();
         rt.block_on(self.mempool.collect_payload(1_048_576))
     }
 
-    fn on_commit(&self, block: &hotmint_types::Block) -> ruc::Result<()> {
+    fn on_commit(&self, block: &hotmint_types::Block, _ctx: &hotmint_types::context::BlockContext) -> ruc::Result<()> {
         let txs = Mempool::decode_payload(&block.payload);
         println!("committed {} txs", txs.len());
         Ok(())

@@ -24,12 +24,12 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 ruc = "9.3"
-rmp-serde = "1"
+serde_cbor_2 = "0.13"
 blake3 = "1"
 ed25519-dalek = { version = "2.2", features = ["serde", "rand_core"] }
 # rand stays at 0.8 for ed25519-dalek 2.x compat (uses rand_core 0.6)
 rand = "0.8"
-vsdb = "10.0"
+vsdb = "10.1"
 litep2p = "0.13"
 futures = "0.3"
 prometheus-client = "0.23"

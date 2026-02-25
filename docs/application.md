@@ -338,9 +338,13 @@ Usage:
 ```rust
 use hotmint::consensus::application::NoopApplication;
 
+use std::sync::{Arc, RwLock};
+use hotmint::consensus::engine::SharedBlockStore;
+
+let shared_store: SharedBlockStore = Arc::new(RwLock::new(Box::new(store)));
 let engine = ConsensusEngine::new(
     state,
-    Box::new(store),
+    shared_store,
     Box::new(network),
     Box::new(NoopApplication),
     Box::new(signer),

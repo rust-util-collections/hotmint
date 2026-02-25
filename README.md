@@ -75,7 +75,7 @@ The consensus engine is decoupled from all I/O through four pluggable traits:
 | Networking | [litep2p](https://crates.io/crates/litep2p) |
 | Async Runtime | [Tokio](https://crates.io/crates/tokio) |
 | Error Handling | [ruc](https://crates.io/crates/ruc) |
-| Serialization | [serde](https://crates.io/crates/serde) + [msgpack](https://crates.io/crates/rmp-serde) |
+| Serialization | [serde](https://crates.io/crates/serde) + [CBOR](https://crates.io/crates/serde_cbor_2) |
 | Metrics | [prometheus-client](https://crates.io/crates/prometheus-client) |
 
 ## References
@@ -251,9 +251,12 @@ for i in 0..NUM_VALIDATORS {
         .map(|(&id, tx)| (id, tx.clone()))
         .collect();
 
+    let store: hotmint::consensus::engine::SharedBlockStore =
+        Arc::new(std::sync::RwLock::new(Box::new(MemoryBlockStore::new())));
+
     let engine = ConsensusEngine::new(
         ConsensusState::new(vid, validator_set.clone()),
-        Box::new(MemoryBlockStore::new()),
+        store,
         Box::new(ChannelNetwork::new(vid, senders)),
         Box::new(MyApp),
         Box::new(signers[i as usize].clone()),
@@ -296,9 +299,14 @@ if let Some(epoch) = persistent_state.load_current_epoch() {
     state.current_epoch = epoch;
 }
 
+use hotmint::consensus::engine::SharedBlockStore;
+
+let shared_store: SharedBlockStore =
+    Arc::new(std::sync::RwLock::new(Box::new(store)));
+
 let engine = ConsensusEngine::new(
     state,
-    Box::new(store),
+    shared_store,
     Box::new(network_sink),  // ChannelNetwork or Litep2pNetworkSink
     Box::new(MyApp),
     Box::new(signer),
@@ -355,13 +363,23 @@ use hotmint::api::rpc::{RpcServer, RpcState};
 let mempool = Arc::new(Mempool::new(10_000, 1_048_576));
 
 // status channel (updated by your commit handler)
-// tuple: (current_view, last_committed_height, epoch)
-let (status_tx, status_rx) = watch::channel((0u64, 0u64, 0u64));
+// tuple: (current_view, last_committed_height, epoch, validator_count)
+let (status_tx, status_rx) = watch::channel((0u64, 0u64, 0u64, 4usize));
+
+use std::sync::RwLock;
+use hotmint::consensus::engine::SharedBlockStore;
+use hotmint::consensus::store::MemoryBlockStore;
+
+let store: SharedBlockStore =
+    Arc::new(RwLock::new(Box::new(MemoryBlockStore::new())));
+let (_peer_tx, peer_info_rx) = watch::channel(vec![]);
 
 let rpc_state = RpcState {
     validator_id: 0,
     mempool: mempool.clone(),
     status_rx,
+    store,
+    peer_info_rx,
 };
 
 let server = RpcServer::bind("127.0.0.1:26657", rpc_state).await.unwrap();

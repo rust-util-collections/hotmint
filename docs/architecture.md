@@ -138,13 +138,14 @@ trait NetworkSink: Send + Sync {
 
 // Application lifecycle — your business logic
 trait Application: Send + Sync {
-    fn create_payload(&self) -> Vec<u8>;
-    fn validate_block(&self, block: &Block) -> bool;
+    fn create_payload(&self, ctx: &BlockContext) -> Vec<u8>;
+    fn validate_block(&self, block: &Block, ctx: &BlockContext) -> bool;
     fn validate_tx(&self, tx: &[u8]) -> bool;
-    fn begin_block(&self, height: Height, view: ViewNumber) -> Result<()>;
+    fn begin_block(&self, ctx: &BlockContext) -> Result<()>;
     fn deliver_tx(&self, tx: &[u8]) -> Result<()>;
-    fn end_block(&self, height: Height) -> Result<()>;
-    fn on_commit(&self, block: &Block) -> Result<()>;
+    fn end_block(&self, ctx: &BlockContext) -> Result<EndBlockResponse>;
+    fn on_commit(&self, block: &Block, ctx: &BlockContext) -> Result<()>;
+    fn on_evidence(&self, proof: &EquivocationProof) -> Result<()>;
     fn query(&self, path: &str, data: &[u8]) -> Result<Vec<u8>>;
 }
 ```

@@ -41,13 +41,13 @@ struct MyApp {
 }
 
 impl Application for MyApp {
-    fn create_payload(&self) -> Vec<u8> {
+    fn create_payload(&self, _ctx: &BlockContext) -> Vec<u8> {
         let rt = tokio::runtime::Handle::current();
         // collect up to 1MB of transactions
         rt.block_on(self.mempool.collect_payload(1_048_576))
     }
 
-    fn on_commit(&self, _block: &Block) -> ruc::Result<()> {
+    fn on_commit(&self, _block: &Block, _ctx: &BlockContext) -> ruc::Result<()> {
         Ok(())
     }
 }
@@ -89,14 +89,24 @@ use hotmint::api::rpc::{RpcServer, RpcState};
 
 let mempool = Arc::new(Mempool::default());
 
-// status channel: (current_view, last_committed_height)
+// status channel: (current_view, last_committed_height, epoch, validator_count)
 // update this from your Application::on_commit handler
-let (status_tx, status_rx) = watch::channel((0u64, 0u64));
+let (status_tx, status_rx) = watch::channel((0u64, 0u64, 0u64, 4usize));
+
+use std::sync::RwLock;
+use hotmint::consensus::engine::SharedBlockStore;
+use hotmint::consensus::store::MemoryBlockStore;
+
+let store: SharedBlockStore =
+    Arc::new(RwLock::new(Box::new(MemoryBlockStore::new())));
+let (_peer_tx, peer_info_rx) = watch::channel(vec![]);
 
 let rpc_state = RpcState {
     validator_id: 0,
     mempool: mempool.clone(),
     status_rx,
+    store,
+    peer_info_rx,
 };
 
 let server = RpcServer::bind("127.0.0.1:26657", rpc_state).await.unwrap();
@@ -111,19 +121,21 @@ Wire the status channel into your application's commit handler:
 ```rust
 struct MyApp {
     mempool: Arc<Mempool>,
-    status_tx: watch::Sender<(u64, u64)>,
+    status_tx: watch::Sender<(u64, u64, u64, usize)>,
 }
 
 impl Application for MyApp {
-    fn on_commit(&self, block: &Block) -> ruc::Result<()> {
+    fn on_commit(&self, block: &Block, ctx: &BlockContext) -> ruc::Result<()> {
         let _ = self.status_tx.send((
             block.view.as_u64(),
             block.height.as_u64(),
+            ctx.epoch.as_u64(),
+            ctx.validator_set.validator_count(),
         ));
         Ok(())
     }
 
-    fn create_payload(&self) -> Vec<u8> {
+    fn create_payload(&self, _ctx: &BlockContext) -> Vec<u8> {
         let rt = tokio::runtime::Handle::current();
         rt.block_on(self.mempool.collect_payload(1_048_576))
     }
@@ -259,11 +271,11 @@ use hotmint::api::rpc::{RpcServer, RpcState};
 
 struct TxCounterApp {
     mempool: Arc<Mempool>,
-    status_tx: watch::Sender<(u64, u64)>,
+    status_tx: watch::Sender<(u64, u64, u64, usize)>,
 }
 
 impl Application for TxCounterApp {
-    fn create_payload(&self) -> Vec<u8> {
+    fn create_payload(&self, _ctx: &BlockContext) -> Vec<u8> {
         let rt = tokio::runtime::Handle::current();
         rt.block_on(self.mempool.collect_payload(1_048_576))
     }
@@ -272,11 +284,13 @@ impl Application for TxCounterApp {
         !tx.is_empty() && tx.len() <= 4096
     }
 
-    fn on_commit(&self, block: &Block) -> Result<()> {
+    fn on_commit(&self, block: &Block, ctx: &BlockContext) -> Result<()> {
         let txs = Mempool::decode_payload(&block.payload);
         let _ = self.status_tx.send((
             block.view.as_u64(),
             block.height.as_u64(),
+            ctx.epoch.as_u64(),
+            ctx.validator_set.validator_count(),
         ));
         println!(
             "height={} txs={} view={}",
@@ -291,13 +305,23 @@ impl Application for TxCounterApp {
 #[tokio::main]
 async fn main() {
     let mempool = Arc::new(Mempool::default());
-    let (status_tx, status_rx) = watch::channel((0u64, 0u64));
+    let (status_tx, status_rx) = watch::channel((0u64, 0u64, 0u64, 4usize));
+
+    use std::sync::RwLock;
+    use hotmint::consensus::engine::SharedBlockStore;
+    use hotmint::consensus::store::MemoryBlockStore;
+
+    let store: SharedBlockStore =
+        Arc::new(RwLock::new(Box::new(MemoryBlockStore::new())));
+    let (_peer_tx, peer_info_rx) = watch::channel(vec![]);
 
     // start RPC server
     let rpc_state = RpcState {
         validator_id: 0,
         mempool: mempool.clone(),
         status_rx,
+        store,
+        peer_info_rx,
     };
     let server = RpcServer::bind("127.0.0.1:26657", rpc_state).await.unwrap();
     println!("RPC listening on {}", server.local_addr());

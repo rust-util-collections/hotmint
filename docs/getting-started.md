@@ -46,7 +46,7 @@ use hotmint::consensus::application::Application;
 struct MyApp;
 
 impl Application for MyApp {
-    fn on_commit(&self, block: &Block) -> Result<()> {
+    fn on_commit(&self, block: &Block, _ctx: &BlockContext) -> Result<()> {
         println!("committed block at height {}", block.height.as_u64());
         Ok(())
     }
@@ -103,9 +103,12 @@ for i in 0..N {
         .map(|(&id, tx)| (id, tx.clone()))
         .collect();
 
+    let store: hotmint::consensus::engine::SharedBlockStore =
+        std::sync::Arc::new(std::sync::RwLock::new(Box::new(MemoryBlockStore::new())));
+
     let engine = ConsensusEngine::new(
         ConsensusState::new(vid, validator_set.clone()),
-        Box::new(MemoryBlockStore::new()),
+        store,
         Box::new(ChannelNetwork::new(vid, senders)),
         Box::new(MyApp),
         Box::new(signers[i as usize].clone()),

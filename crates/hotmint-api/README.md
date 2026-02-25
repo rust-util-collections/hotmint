@@ -25,12 +25,22 @@ use hotmint_mempool::Mempool;
 use hotmint_api::rpc::{RpcServer, RpcState};
 
 let mempool = Arc::new(Mempool::default());
-let (status_tx, status_rx) = watch::channel((0u64, 0u64));
+let (status_tx, status_rx) = watch::channel((0u64, 0u64, 0u64, 4usize));
+
+use std::sync::{Arc as StdArc, RwLock};
+use hotmint_consensus::store::MemoryBlockStore;
+use hotmint_consensus::engine::SharedBlockStore;
+
+let store: SharedBlockStore =
+    StdArc::new(RwLock::new(Box::new(MemoryBlockStore::new())));
+let (_peer_tx, peer_info_rx) = watch::channel(vec![]);
 
 let rpc_state = RpcState {
     validator_id: 0,
     mempool: mempool.clone(),
     status_rx,
+    store,
+    peer_info_rx,
 };
 
 let server = RpcServer::bind("127.0.0.1:26657", rpc_state).await.unwrap();
@@ -44,14 +54,16 @@ tokio::spawn(async move { server.run().await });
 use hotmint_consensus::application::Application;
 
 struct MyApp {
-    status_tx: watch::Sender<(u64, u64)>,
+    status_tx: watch::Sender<(u64, u64, u64, usize)>,
 }
 
 impl Application for MyApp {
-    fn on_commit(&self, block: &hotmint_types::Block) -> ruc::Result<()> {
+    fn on_commit(&self, block: &hotmint_types::Block, ctx: &hotmint_types::context::BlockContext) -> ruc::Result<()> {
         let _ = self.status_tx.send((
             block.view.as_u64(),
             block.height.as_u64(),
+            ctx.epoch.as_u64(),
+            ctx.validator_set.validator_count(),
         ));
         Ok(())
     }

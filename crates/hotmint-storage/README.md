@@ -26,9 +26,12 @@ let store = VsdbBlockStore::new();
 // genesis block is inserted automatically
 
 // use as a drop-in replacement for MemoryBlockStore
+use std::sync::{Arc, RwLock};
+
+let shared_store = Arc::new(RwLock::new(Box::new(store) as Box<dyn BlockStore>));
 let engine = ConsensusEngine::new(
     state,
-    Box::new(store),
+    shared_store,
     // ...
 );
 ```

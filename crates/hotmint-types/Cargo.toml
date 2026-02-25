@@ -12,4 +12,4 @@ serde = { workspace = true }
 ruc = { workspace = true }
 
 [dev-dependencies]
-rmp-serde = { workspace = true }
+serde_cbor_2 = { workspace = true }

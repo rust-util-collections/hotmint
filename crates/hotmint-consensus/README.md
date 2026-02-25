@@ -38,7 +38,7 @@ use hotmint_consensus::application::NoopApplication;
 
 let engine = ConsensusEngine::new(
     ConsensusState::new(vid, validator_set),
-    Box::new(MemoryBlockStore::new()),
+    std::sync::Arc::new(std::sync::RwLock::new(Box::new(MemoryBlockStore::new()))),
     Box::new(ChannelNetwork::new(vid, senders)),
     Box::new(NoopApplication),
     Box::new(signer),
@@ -60,7 +60,7 @@ use hotmint_consensus::application::Application;
 struct MyApp;
 
 impl Application for MyApp {
-    fn on_commit(&self, block: &Block) -> Result<()> {
+    fn on_commit(&self, block: &Block, _ctx: &hotmint_types::context::BlockContext) -> Result<()> {
         println!("committed height {}", block.height.as_u64());
         Ok(())
     }

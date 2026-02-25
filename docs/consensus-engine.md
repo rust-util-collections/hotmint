@@ -24,12 +24,15 @@ The engine takes ownership of all its dependencies and runs as an infinite async
 ## Construction
 
 ```rust
-use hotmint::consensus::engine::ConsensusEngine;
+use std::sync::{Arc, RwLock};
+use hotmint::consensus::engine::{ConsensusEngine, SharedBlockStore};
 use hotmint::consensus::state::ConsensusState;
+
+let store: SharedBlockStore = Arc::new(RwLock::new(Box::new(block_store)));
 
 let engine = ConsensusEngine::new(
     state,                    // ConsensusState
-    Box::new(block_store),    // impl BlockStore
+    store,                    // SharedBlockStore = Arc<RwLock<Box<dyn BlockStore>>>
     Box::new(network_sink),   // impl NetworkSink
     Box::new(application),    // impl Application
     Box::new(signer),         // impl Signer
@@ -196,10 +199,10 @@ When a double certificate is formed:
 1. Identify the committed block from the double certificate
 2. Walk the chain from the committed block backward to `last_committed_height + 1`
 3. For each block in ascending height order:
-   - `app.begin_block(height, view)`
+   - `app.begin_block(ctx)` (where `ctx` is a `BlockContext` with height, view, proposer, epoch, validator_set)
    - Decode payload and call `app.deliver_tx(tx)` for each transaction
-   - `app.end_block(height)`
-   - `app.on_commit(block)`
+   - `app.end_block(ctx)` (returns `EndBlockResponse` which may contain validator updates)
+   - `app.on_commit(block, ctx)`
 4. Update `last_committed_height`
 
 ## Pacemaker Integration

@@ -62,7 +62,8 @@ NetworkService
   ├── litep2p instance (manages TCP connections)
   ├── Notification protocol: /hotmint/consensus/notif/1 (broadcast)
   ├── Request-Response protocol: /hotmint/consensus/reqresp/1 (directed)
-  ├── PeerMap (ValidatorId <-> PeerId mapping)
+  ├── Sync protocol: /hotmint/sync/1 (block synchronization)
+  ├── PeerMap (ValidatorId <-> PeerId mapping, supports runtime add/remove)
   └── mpsc channels (bridge to ConsensusEngine)
 ```
 
@@ -81,6 +82,13 @@ peer_map.insert(ValidatorId(3), peer_id_3);
 ```
 
 Each validator's `PeerId` is derived from its litep2p keypair. You need to distribute these mappings out-of-band (e.g., via a configuration file or genesis file).
+
+`PeerMap` also supports runtime removal of peers:
+
+```rust
+// remove a peer by ValidatorId (returns the removed PeerId if present)
+let removed_peer: Option<PeerId> = peer_map.remove(ValidatorId(2));
+```
 
 ### Creating the Service
 
@@ -115,9 +123,13 @@ let (net_service, network_sink, msg_rx) = NetworkService::create(
 tokio::spawn(async move { net_service.run().await });
 
 // build the consensus engine with the P2P network sink
+use std::sync::{Arc, RwLock};
+use hotmint::consensus::engine::SharedBlockStore;
+
+let shared_store: SharedBlockStore = Arc::new(RwLock::new(Box::new(store)));
 let engine = ConsensusEngine::new(
     state,
-    Box::new(store),
+    shared_store,
     Box::new(network_sink),
     Box::new(app),
     Box::new(signer),
@@ -128,7 +140,7 @@ tokio::spawn(async move { engine.run().await });
 
 ### Message Serialization
 
-All `ConsensusMessage` values are serialized with MessagePack (`rmp-serde`) before transmission and deserialized on receipt. This is handled automatically by the `NetworkService`.
+All `ConsensusMessage` values are serialized with CBOR (`serde_cbor_2`) before transmission and deserialized on receipt. This is handled automatically by the `NetworkService`.
 
 ### Sub-Protocols
 
@@ -136,8 +148,9 @@ All `ConsensusMessage` values are serialized with MessagePack (`rmp-serde`) befo
 |:---------|:-----|:----|
 | Notification | `/hotmint/consensus/notif/1` | `broadcast()` — sends to all connected peers |
 | Request-Response | `/hotmint/consensus/reqresp/1` | `send_to()` — sends to a specific peer |
+| Sync | `/hotmint/sync/1` | Block synchronization — request-response for `SyncRequest`/`SyncResponse` |
 
-The notification protocol is fire-and-forget. The request-response protocol sends a message and expects an acknowledgment (empty response).
+The notification protocol is fire-and-forget. The request-response protocol sends a message and expects an acknowledgment (empty response). The sync protocol is a dedicated request-response channel used by the block sync subsystem to request missing blocks from peers.
 
 ## Full P2P Node Example
 
@@ -185,9 +198,11 @@ async fn run_validator(
     tokio::spawn(async move { net_service.run().await });
 
     // consensus engine
+    let shared_store: hotmint::consensus::engine::SharedBlockStore =
+        Arc::new(std::sync::RwLock::new(Box::new(store)));
     let engine = ConsensusEngine::new(
         state,
-        Box::new(store),
+        shared_store,
         Box::new(network_sink),
         Box::new(app),
         Box::new(signer),
@@ -211,12 +226,12 @@ struct MyNetworkSink {
 
 impl NetworkSink for MyNetworkSink {
     fn broadcast(&self, msg: ConsensusMessage) {
-        let bytes = rmp_serde::to_vec(&msg).unwrap();
+        let bytes = serde_cbor_2::to_vec(&msg).unwrap();
         // send `bytes` to all known peers
     }
 
     fn send_to(&self, target: ValidatorId, msg: ConsensusMessage) {
-        let bytes = rmp_serde::to_vec(&msg).unwrap();
+        let bytes = serde_cbor_2::to_vec(&msg).unwrap();
         // send `bytes` to the peer corresponding to `target`
     }
 }
@@ -229,8 +244,42 @@ let (msg_tx, msg_rx) = tokio::sync::mpsc::unbounded_channel();
 
 // in your network receive loop:
 let sender_id = identify_sender(&peer);
-let msg: ConsensusMessage = rmp_serde::from_slice(&bytes).unwrap();
+let msg: ConsensusMessage = serde_cbor_2::from_slice(&bytes).unwrap();
 msg_tx.send((sender_id, msg)).unwrap();
 
 // pass msg_rx to ConsensusEngine::new()
 ```
+
+## Dynamic Peer Management
+
+The `Litep2pNetworkSink` supports adding and removing peers at runtime via `NetCommand::AddPeer` and `NetCommand::RemovePeer`. This enables dynamic validator set changes without restarting the network service.
+
+```rust
+// add a new peer at runtime
+network_sink.add_peer(
+    ValidatorId(4),
+    new_peer_id,
+    vec!["/ip4/10.0.0.5/tcp/30000".parse().unwrap()],
+);
+
+// remove a peer at runtime
+network_sink.remove_peer(ValidatorId(4));
+```
+
+These methods send commands through an internal channel to the `NetworkService`, which updates the `PeerMap` and peer info accordingly. This is typically used in conjunction with validator set changes triggered by `Application::end_block()` returning new `ValidatorUpdate` entries.
+
+## Block Synchronization
+
+The `/hotmint/sync/1` request-response protocol enables new or lagging nodes to catch up with the network by requesting missing blocks from peers.
+
+The protocol uses `SyncRequest` and `SyncResponse` messages (defined in `hotmint_types::sync`) serialized with CBOR. The `Litep2pNetworkSink` provides methods for initiating sync:
+
+```rust
+// send a sync request to a specific peer
+network_sink.send_sync_request(peer_id, &sync_request);
+
+// respond to an incoming sync request
+network_sink.send_sync_response(request_id, &sync_response);
+```
+
+Incoming sync requests are forwarded to the sync handler via `IncomingSyncRequest`, which contains the `request_id`, originating `peer`, and the deserialized `SyncRequest`.

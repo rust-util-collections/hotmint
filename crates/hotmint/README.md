@@ -52,7 +52,7 @@ use hotmint::crypto::Ed25519Signer;
 struct MyApp;
 
 impl Application for MyApp {
-    fn on_commit(&self, block: &Block) -> Result<()> {
+    fn on_commit(&self, block: &Block, _ctx: &BlockContext) -> Result<()> {
         println!("committed height {}", block.height.as_u64());
         Ok(())
     }

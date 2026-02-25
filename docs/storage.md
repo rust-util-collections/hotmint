@@ -76,6 +76,12 @@ pub trait BlockStore: Send + Sync {
     fn put_block(&mut self, block: Block);
     fn get_block(&self, hash: &BlockHash) -> Option<Block>;
     fn get_block_by_height(&self, h: Height) -> Option<Block>;
+
+    /// Get blocks in [from, to] inclusive. Default iterates one-by-one.
+    fn get_blocks_in_range(&self, from: Height, to: Height) -> Vec<Block> { /* default */ }
+
+    /// Return the highest stored block height. Default returns genesis.
+    fn tip_height(&self) -> Height { Height::GENESIS }
 }
 ```
 
@@ -132,9 +138,15 @@ pub struct VsdbBlockStore {
 ### 在 ConsensusEngine 中使用
 
 ```rust
+use std::sync::{Arc, RwLock};
+use hotmint::consensus::engine::SharedBlockStore;
+
+let store: SharedBlockStore =
+    Arc::new(RwLock::new(Box::new(VsdbBlockStore::new())));
+
 let engine = ConsensusEngine::new(
     state,
-    Box::new(VsdbBlockStore::new()),  // 替换为持久化存储
+    store,  // SharedBlockStore = Arc<RwLock<Box<dyn BlockStore>>>
     Box::new(network_sink),
     Box::new(app),
     Box::new(signer),
@@ -328,7 +340,7 @@ impl SqliteBlockStore {
 
 impl BlockStore for SqliteBlockStore {
     fn put_block(&mut self, block: Block) {
-        let data = rmp_serde::to_vec(&block).unwrap();
+        let data = serde_cbor_2::to_vec(&block).unwrap();
         self.conn.execute(
             "INSERT OR REPLACE INTO blocks (hash, height, data) VALUES (?1, ?2, ?3)",
             (&block.hash.0[..], block.height.as_u64() as i64, &data),
@@ -342,7 +354,7 @@ impl BlockStore for SqliteBlockStore {
                 [&hash.0[..]],
                 |row| {
                     let data: Vec<u8> = row.get(0)?;
-                    Ok(rmp_serde::from_slice(&data).unwrap())
+                    Ok(serde_cbor_2::from_slice(&data).unwrap())
                 },
             )
             .ok()
@@ -355,7 +367,7 @@ impl BlockStore for SqliteBlockStore {
                 [h.as_u64() as i64],
                 |row| {
                     let data: Vec<u8> = row.get(0)?;
-                    Ok(rmp_serde::from_slice(&data).unwrap())
+                    Ok(serde_cbor_2::from_slice(&data).unwrap())
                 },
             )
             .ok()

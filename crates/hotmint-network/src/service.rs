@@ -256,7 +256,7 @@ impl NetworkService {
                     .get(&peer)
                     .copied()
                     .unwrap_or_default();
-                match rmp_serde::from_slice::<ConsensusMessage>(&notification) {
+                match serde_cbor_2::from_slice::<ConsensusMessage>(&notification) {
                     Ok(msg) => {
                         let _ = self.msg_tx.send((sender, msg));
                     }
@@ -285,7 +285,7 @@ impl NetworkService {
                     .get(&peer)
                     .copied()
                     .unwrap_or_default();
-                match rmp_serde::from_slice::<ConsensusMessage>(&request) {
+                match serde_cbor_2::from_slice::<ConsensusMessage>(&request) {
                     Ok(msg) => {
                         let _ = self.msg_tx.send((sender, msg));
                         self.reqresp_handle.send_response(request_id, vec![]);
@@ -312,7 +312,7 @@ impl NetworkService {
                 ..
             } => {
                 // Forward sync request to the sync responder
-                match rmp_serde::from_slice::<SyncRequest>(&request) {
+                match serde_cbor_2::from_slice::<SyncRequest>(&request) {
                     Ok(req) => {
                         let _ = self.sync_req_tx.send(IncomingSyncRequest {
                             request_id,
@@ -323,7 +323,7 @@ impl NetworkService {
                     Err(e) => {
                         warn!(error = %e, "failed to decode sync request");
                         let err_resp = SyncResponse::Error(format!("decode error: {e}"));
-                        if let Ok(bytes) = rmp_serde::to_vec(&err_resp) {
+                        if let Ok(bytes) = serde_cbor_2::to_vec(&err_resp) {
                             self.sync_handle.send_response(request_id, bytes);
                         } else {
                             self.sync_handle.reject_request(request_id);
@@ -337,7 +337,7 @@ impl NetworkService {
                 ..
             } => {
                 // Forward sync response to the sync requester
-                match rmp_serde::from_slice::<SyncResponse>(&response) {
+                match serde_cbor_2::from_slice::<SyncResponse>(&response) {
                     Ok(resp) => {
                         let _ = self.sync_resp_tx.send(resp);
                     }
@@ -443,13 +443,13 @@ impl Litep2pNetworkSink {
     }
 
     pub fn send_sync_request(&self, peer_id: PeerId, request: &SyncRequest) {
-        if let Ok(bytes) = rmp_serde::to_vec(request) {
+        if let Ok(bytes) = serde_cbor_2::to_vec(request) {
             let _ = self.cmd_tx.send(NetCommand::SyncRequest(peer_id, bytes));
         }
     }
 
     pub fn send_sync_response(&self, request_id: RequestId, response: &SyncResponse) {
-        if let Ok(bytes) = rmp_serde::to_vec(response) {
+        if let Ok(bytes) = serde_cbor_2::to_vec(response) {
             let _ = self.cmd_tx.send(NetCommand::SyncRespond(request_id, bytes));
         }
     }
@@ -457,13 +457,13 @@ impl Litep2pNetworkSink {
 
 impl NetworkSink for Litep2pNetworkSink {
     fn broadcast(&self, msg: ConsensusMessage) {
-        if let Ok(bytes) = rmp_serde::to_vec(&msg) {
+        if let Ok(bytes) = serde_cbor_2::to_vec(&msg) {
             let _ = self.cmd_tx.send(NetCommand::Broadcast(bytes));
         }
     }
 
     fn send_to(&self, target: ValidatorId, msg: ConsensusMessage) {
-        if let Ok(bytes) = rmp_serde::to_vec(&msg) {
+        if let Ok(bytes) = serde_cbor_2::to_vec(&msg) {
             let _ = self.cmd_tx.send(NetCommand::SendTo(target, bytes));
         }
     }

@@ -18,9 +18,9 @@
 | 双签检测 / 证据机制 | ✅ 已实现 | `VoteCollector` 检测双签并返回 `EquivocationProof`，`Application::on_evidence()` 回调 |
 | Application 返回 ValidatorSet | ✅ 已实现 | `end_block` 返回 `EndBlockResponse { validator_updates }` |
 | Application 访问 ValidatorSet | ✅ 已实现 | `BlockContext` 提供 `&ValidatorSet` 和 `EpochNumber` |
-| 状态同步 / 区块同步 | ❌ 缺失 | 新节点无法追赶 |
-| 动态 Peer 发现 | ❌ 缺失 | 静态 peer 配置 |
-| RPC 查询能力 | ⚠️ 基础 | status（含 epoch）+ submit_tx |
+| 状态同步 / 区块同步 | ✅ 已实现 | Block sync via `/hotmint/sync/1` 协议，`sync_to_tip` + `replay_blocks` |
+| 动态 Peer 发现 | ✅ 已实现 | `PeerMap::remove()`，`NetCommand::AddPeer/RemovePeer`，运行时增删节点 |
+| RPC 查询能力 | ✅ 已实现 | status, submit_tx, get_block, get_block_by_hash, get_validators, get_epoch, get_peers |
 
 ---
 
@@ -161,23 +161,17 @@ fn validate_block(&self, block: &Block, ctx: &BlockContext) -> bool;
 
 ## 7. 状态同步
 
-### 现状：❌ 缺失
+### 现状：✅ 区块同步已实现
 
-- 无快照 (snapshot) 机制
-- 无状态同步协议
-- 新节点必须从 genesis 重放所有区块
-- `BlockStore` 只提供 `get_block` / `get_block_by_height`，无批量查询
-- `ConsensusMessage` 无同步相关消息类型
-- `NetworkSink` 无点对点数据请求能力（request-response 协议存在但仅用于共识消息）
+- `/hotmint/sync/1` request-response 协议用于区块同步
+- `SyncRequest` / `SyncResponse` 消息类型定义在 `hotmint_types::sync`
+- `BlockStore` 提供 `get_blocks_in_range(from, to)` 范围查询和 `tip_height()` 方法
+- `sync_to_tip` 实现完整的同步流程：请求缺失区块 → `replay_blocks` 重放
+- `SharedBlockStore`（`Arc<RwLock<Box<dyn BlockStore>>>`）允许 sync 和引擎共享 block store
 
-### 建议方案
+### 未来可选改进
 
-**Phase 1：区块同步**
-- 添加 `BlockSync` 协议，新节点向已有节点请求缺失的区块
-- `BlockStore` 添加 `get_blocks_range(from: Height, to: Height) -> Vec<Block>`
-- 利用现有的 request-response 网络协议传输区块
-
-**Phase 2：状态快照**
+**状态快照**
 - Application trait 添加 `create_snapshot()` / `restore_snapshot()` 方法
 - 实现定期快照 + 增量同步
 - 新节点先下载最近快照，再同步后续区块
@@ -186,42 +180,44 @@ fn validate_block(&self, block: &Block, ctx: &BlockContext) -> bool;
 
 ## 8. 网络动态性
 
-### 现状
+### 现状：✅ 动态 Peer 管理已实现
 
 - litep2p P2P 传输（TCP），支持广播和单播
-- `PeerMap`（ValidatorId ↔ PeerId）在 `NetworkService::create()` 时静态配置
-- 运行时不可添加/移除 peer
-- 无动态发现协议（无 DHT / gossip peer exchange）
-- 无 NAT 穿透
-- 无优雅关闭
+- `PeerMap` 支持运行时 `insert()` 和 `remove()` 操作
+- `NetCommand::AddPeer(ValidatorId, PeerId, Vec<Multiaddr>)` / `NetCommand::RemovePeer(ValidatorId)` 命令
+- `Litep2pNetworkSink::add_peer()` / `remove_peer()` 公开方法，可从应用层调用
+- `PeerStatus` 通过 `watch` channel 实时推送给 RPC 层
 
-### 建议方案
+### 未来可选改进
 
-1. **PeerMap 动态化**：支持运行时 add/remove peer
-2. **Peer 交换协议**：节点间交换 peer 列表
-3. **健康检查**：定期 ping/pong 检测节点存活
-4. **与 ValidatorSet 更新联动**：当 ValidatorSet 变更时，自动更新 PeerMap
+1. **Peer 交换协议**：节点间交换 peer 列表
+2. **健康检查**：定期 ping/pong 检测节点存活
+3. **与 ValidatorSet 更新联动**：当 ValidatorSet 变更时，自动更新 PeerMap
+4. **NAT 穿透**
+5. **优雅关闭**
 
 ---
 
 ## 9. RPC API
 
-### 现状
+### 现状：✅ 已扩展
 
-仅两个端点：
-- `status` — validator_id, current_view, last_committed_height, mempool_size
+已实现的端点：
+- `status` — validator_id, current_view, last_committed_height, epoch, validator_count, mempool_size
 - `submit_tx` — 提交交易到 mempool
+- `get_block(height)` — 按高度查区块
+- `get_block_by_hash(hash)` — 按哈希查区块
+- `get_validators()` — 当前 validator 集合
+- `get_epoch()` — 当前 epoch 信息
+- `get_peers()` — 已连接 peer 列表
 
-### 建议补充
+`RpcState` 包含 `SharedBlockStore` 和 `peer_info_rx` 用于支持上述查询。
+
+### 未来可选补充
 
 | 端点 | 说明 | 优先级 |
 |:-----|:-----|:-------|
-| `get_block(height)` | 按高度查区块 | 高 |
-| `get_block_by_hash(hash)` | 按哈希查区块 | 高 |
-| `get_validators()` | 当前 validator 集合 | 高 |
 | `get_validator(id)` | 单个 validator 信息 | 中 |
-| `get_epoch()` | 当前 epoch 信息 | 中 |
-| `get_peers()` | 已连接 peer 列表 | 中 |
 | `get_consensus_state()` | view, height, role | 中 |
 
 ---
@@ -248,26 +244,20 @@ fn validate_block(&self, block: &Block, ctx: &BlockContext) -> bool;
 2. ✅ `begin_block`、`end_block`、`on_commit`、`create_payload`、`validate_block` 均使用 `BlockContext`
 3. ✅ Application 通过 `ctx.validator_set` 获得 `&ValidatorSet` 只读访问
 
-### Phase 4：状态同步 (TODO)
+### Phase 4：状态同步 ✅ 已完成
 
-**目标**：新 validator 节点能追赶到当前状态。
+1. ✅ `BlockStore` 添加 `get_blocks_in_range(from, to)` 范围查询和 `tip_height()` 方法
+2. ✅ 新增 `/hotmint/sync/1` request-response 协议，使用 `SyncRequest` / `SyncResponse` 消息
+3. ✅ 实现 `sync_to_tip` 区块同步流程：请求缺失区块 → `replay_blocks` 重放 → 加入共识
+4. ✅ `SharedBlockStore`（`Arc<RwLock<Box<dyn BlockStore>>>`）使 block store 可在引擎和 RPC/sync 间共享
 
-1. `BlockStore` 添加范围查询 `get_blocks_range()`
-2. 新增 `BlockSync` 网络协议
-3. 实现区块同步流程（请求缺失区块 → 重放 → 加入共识）
-4. Application trait 添加 `create_snapshot()` / `restore_snapshot()`
+### Phase 5：网络动态化 + RPC 扩展 ✅ 已完成
 
-**依赖改动**：hotmint-consensus, hotmint-network, hotmint-storage
-
-### Phase 5：网络动态化 + RPC 扩展 (TODO)
-
-**目标**：支持运行时 peer 管理和丰富的查询接口。
-
-1. `PeerMap` 支持运行时增删
-2. 与 ValidatorSet 变更联动
-3. 补充 RPC 端点（区块查询、validator 查询、epoch 查询）
-
-**依赖改动**：hotmint-network, hotmint-api
+1. ✅ `PeerMap::remove()` 支持运行时移除 peer
+2. ✅ `NetCommand::AddPeer` / `NetCommand::RemovePeer` 命令，通过 `Litep2pNetworkSink::add_peer()` / `remove_peer()` 公开方法调用
+3. ✅ RPC 扩展：`get_block(height)`、`get_block_by_hash(hash)`、`get_validators()`、`get_epoch()`、`get_peers()`
+4. ✅ `SharedBlockStore` 使 RPC 层可直接查询区块数据
+5. ✅ `PeerStatus` 通过 `watch` channel 实时推送给 RPC 层
 
 ---
 
@@ -285,3 +275,6 @@ fn validate_block(&self, block: &Block, ctx: &BlockContext) -> bool;
 - **动态 ValidatorSet + Epoch 切换**：应用层通过 EndBlockResponse 触发 validator set 变更，引擎在 view 边界执行 epoch 切换
 - **双签检测与证据机制**：VoteCollector 检测 equivocation 并通过 on_evidence 回调应用层
 - **Prometheus 指标采集**：blocks_committed, votes_sent, view_timeouts 等
+- **Block sync + 状态追赶**：`/hotmint/sync/1` 协议，`sync_to_tip` + `replay_blocks`，新节点可从已有节点同步缺失区块
+- **动态 Peer 管理（运行时增删节点）**：`PeerMap::remove()`，`NetCommand::AddPeer/RemovePeer`，`Litep2pNetworkSink::add_peer()/remove_peer()`
+- **丰富的 RPC API（区块查询、验证者查询、epoch 查询、peer 管理）**：get_block, get_block_by_hash, get_validators, get_epoch, get_peers
