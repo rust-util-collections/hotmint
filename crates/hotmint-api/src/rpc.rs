@@ -137,9 +137,7 @@ async fn handle_request(state: &RpcState, line: &str) -> RpcResponse {
                     let store = state.store.read().unwrap();
                     match store.get_block(&hash) {
                         Some(block) => json_ok(req.id, &block_to_info(&block)),
-                        None => {
-                            RpcResponse::err(req.id, -32602, "block not found".to_string())
-                        }
+                        None => RpcResponse::err(req.id, -32602, "block not found".to_string()),
                     }
                 }
                 None => RpcResponse::err(req.id, -32602, "invalid hash hex".to_string()),

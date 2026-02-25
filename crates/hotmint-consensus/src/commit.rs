@@ -19,8 +19,7 @@ pub fn decode_payload(payload: &[u8]) -> Vec<&[u8]> {
     let mut txs = Vec::new();
     let mut offset = 0;
     while offset + 4 <= payload.len() {
-        let len =
-            u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+        let len = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
         if offset + len > payload.len() {
             break;
@@ -126,9 +125,9 @@ mod tests {
     use super::*;
     use crate::application::NoopApplication;
     use crate::store::MemoryBlockStore;
-    use hotmint_types::{AggregateSignature, QuorumCertificate, ValidatorId, ViewNumber};
-    use hotmint_types::validator::{ValidatorInfo, ValidatorSet};
     use hotmint_types::crypto::PublicKey;
+    use hotmint_types::validator::{ValidatorInfo, ValidatorSet};
+    use hotmint_types::{AggregateSignature, QuorumCertificate, ValidatorId, ViewNumber};
 
     fn make_block(height: u64, parent: BlockHash) -> Block {
         let hash = BlockHash([height as u8; 32]);

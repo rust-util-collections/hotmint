@@ -1,9 +1,9 @@
 use ruc::*;
 
+use hotmint_types::Block;
 use hotmint_types::context::BlockContext;
 use hotmint_types::evidence::EquivocationProof;
 use hotmint_types::validator_update::EndBlockResponse;
-use hotmint_types::Block;
 
 /// ABCI-like application interface for the consensus engine.
 ///

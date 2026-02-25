@@ -195,10 +195,7 @@ impl ConsensusEngine {
                         }
                         drop(store);
                         self.state.highest_double_cert = Some(dc.clone());
-                        self.advance_view_to(
-                            block.view,
-                            ViewEntryTrigger::DoubleCert(dc.clone()),
-                        );
+                        self.advance_view_to(block.view, ViewEntryTrigger::DoubleCert(dc.clone()));
                     } else {
                         return Ok(());
                     }

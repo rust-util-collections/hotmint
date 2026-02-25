@@ -11,11 +11,10 @@ use litep2p::protocol::notification::{
     ConfigBuilder as NotifConfigBuilder, NotificationEvent, NotificationHandle, ValidationResult,
 };
 use litep2p::protocol::request_response::{
-    ConfigBuilder as ReqRespConfigBuilder, DialOptions, RequestResponseEvent,
-    RequestResponseHandle,
+    ConfigBuilder as ReqRespConfigBuilder, DialOptions, RequestResponseEvent, RequestResponseHandle,
 };
-use litep2p::types::RequestId;
 use litep2p::transport::tcp::config::Config as TcpConfig;
+use litep2p::types::RequestId;
 use litep2p::types::multiaddr::Multiaddr;
 use litep2p::{Litep2p, Litep2pEvent, PeerId};
 use serde::{Deserialize, Serialize};
@@ -133,10 +132,9 @@ impl NetworkService {
             .with_async_channel_size(1024)
             .build();
 
-        let (reqresp_config, reqresp_handle) =
-            ReqRespConfigBuilder::new(REQ_RESP_PROTOCOL.into())
-                .with_max_size(MAX_NOTIFICATION_SIZE)
-                .build();
+        let (reqresp_config, reqresp_handle) = ReqRespConfigBuilder::new(REQ_RESP_PROTOCOL.into())
+            .with_max_size(MAX_NOTIFICATION_SIZE)
+            .build();
 
         let (sync_config, sync_handle) = ReqRespConfigBuilder::new(SYNC_PROTOCOL.into())
             .with_max_size(MAX_NOTIFICATION_SIZE)

@@ -43,8 +43,9 @@ impl VoteCollector {
             if *v == vote.view
                 && *vt == vote.vote_type
                 && *bh != vote.block_hash
-                && let Some(existing) =
-                    existing_votes.iter().find(|ev| ev.validator == vote.validator)
+                && let Some(existing) = existing_votes
+                    .iter()
+                    .find(|ev| ev.validator == vote.validator)
             {
                 equivocation = Some(EquivocationProof {
                     validator: vote.validator,

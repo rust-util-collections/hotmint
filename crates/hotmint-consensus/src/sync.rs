@@ -80,9 +80,7 @@ pub async fn sync_to_tip(
         let blocks = match timeout(SYNC_TIMEOUT, response_rx.recv()).await {
             Ok(Some(SyncResponse::Blocks(blocks))) => blocks,
             Ok(Some(SyncResponse::Error(e))) => return Err(eg!("peer error: {}", e)),
-            Ok(Some(SyncResponse::Status { .. })) => {
-                return Err(eg!("unexpected status response"))
-            }
+            Ok(Some(SyncResponse::Status { .. })) => return Err(eg!("unexpected status response")),
             Ok(None) => return Err(eg!("sync channel closed")),
             Err(_) => return Err(eg!("sync request timed out")),
         };
@@ -92,13 +90,7 @@ pub async fn sync_to_tip(
         }
 
         // Validate chain continuity and replay
-        replay_blocks(
-            &blocks,
-            store,
-            app,
-            current_epoch,
-            last_committed_height,
-        )?;
+        replay_blocks(&blocks, store, app, current_epoch, last_committed_height)?;
 
         info!(
             synced_to = last_committed_height.as_u64(),
@@ -156,7 +148,8 @@ pub fn replay_blocks(
             validator_set: &current_epoch.validator_set,
         };
 
-        app.begin_block(&ctx).c(d!("begin_block failed during sync"))?;
+        app.begin_block(&ctx)
+            .c(d!("begin_block failed during sync"))?;
 
         for tx in commit::decode_payload(&block.payload) {
             app.deliver_tx(tx).c(d!("deliver_tx failed during sync"))?;
@@ -172,11 +165,7 @@ pub fn replay_blocks(
             let new_vs = current_epoch
                 .validator_set
                 .apply_updates(&response.validator_updates);
-            *current_epoch = Epoch::new(
-                current_epoch.number.next(),
-                block.view,
-                new_vs,
-            );
+            *current_epoch = Epoch::new(current_epoch.number.next(), block.view, new_vs);
         }
 
         *last_committed_height = block.height;
