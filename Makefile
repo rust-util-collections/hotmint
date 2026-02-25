@@ -5,10 +5,10 @@ CRATES := \
 	hotmint-types \
 	hotmint-mempool \
 	hotmint-crypto \
-	hotmint-api \
 	hotmint-consensus \
-	hotmint-storage \
 	hotmint-network \
+	hotmint-storage \
+	hotmint-api \
 	hotmint
 
 .PHONY: all fmt lint build test bench bench-e2e run clean check doc update publish
@@ -56,7 +56,7 @@ publish:
 		if [ $$status -eq 0 ]; then \
 			echo "ok"; \
 			sleep 2; \
-		elif echo "$$output" | grep -q "already uploaded"; then \
+		elif echo "$$output" | grep -qE "already uploaded|already exists"; then \
 			echo "skipped (already published)"; \
 		else \
 			echo "FAILED"; \
