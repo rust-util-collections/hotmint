@@ -6,6 +6,24 @@ pub trait BlockStore: Send + Sync {
     fn put_block(&mut self, block: Block);
     fn get_block(&self, hash: &BlockHash) -> Option<Block>;
     fn get_block_by_height(&self, h: Height) -> Option<Block>;
+
+    /// Get blocks in [from, to] inclusive. Default iterates one-by-one.
+    fn get_blocks_in_range(&self, from: Height, to: Height) -> Vec<Block> {
+        let mut blocks = Vec::new();
+        let mut h = from.as_u64();
+        while h <= to.as_u64() {
+            if let Some(block) = self.get_block_by_height(Height(h)) {
+                blocks.push(block);
+            }
+            h += 1;
+        }
+        blocks
+    }
+
+    /// Return the highest stored block height.
+    fn tip_height(&self) -> Height {
+        Height::GENESIS
+    }
 }
 
 /// In-memory block store stub
@@ -48,6 +66,21 @@ impl BlockStore for MemoryBlockStore {
             .get(&h.as_u64())
             .and_then(|hash| self.by_hash.get(hash))
             .cloned()
+    }
+
+    fn get_blocks_in_range(&self, from: Height, to: Height) -> Vec<Block> {
+        self.by_height
+            .range(from.as_u64()..=to.as_u64())
+            .filter_map(|(_, hash)| self.by_hash.get(hash).cloned())
+            .collect()
+    }
+
+    fn tip_height(&self) -> Height {
+        self.by_height
+            .keys()
+            .next_back()
+            .map(|h| Height(*h))
+            .unwrap_or(Height::GENESIS)
     }
 }
 
@@ -104,6 +137,43 @@ mod tests {
         let store = MemoryBlockStore::new();
         assert!(store.get_block(&BlockHash([99u8; 32])).is_none());
         assert!(store.get_block_by_height(Height(999)).is_none());
+    }
+
+    #[test]
+    fn test_get_blocks_in_range() {
+        let mut store = MemoryBlockStore::new();
+        let b1 = make_block(1, BlockHash::GENESIS);
+        let b2 = make_block(2, b1.hash);
+        let b3 = make_block(3, b2.hash);
+        store.put_block(b1);
+        store.put_block(b2);
+        store.put_block(b3);
+
+        let blocks = store.get_blocks_in_range(Height(1), Height(3));
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0].height, Height(1));
+        assert_eq!(blocks[2].height, Height(3));
+
+        // Partial range
+        let blocks = store.get_blocks_in_range(Height(2), Height(3));
+        assert_eq!(blocks.len(), 2);
+
+        // Out of range
+        let blocks = store.get_blocks_in_range(Height(10), Height(20));
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn test_tip_height() {
+        let store = MemoryBlockStore::new();
+        assert_eq!(store.tip_height(), Height::GENESIS);
+
+        let mut store = MemoryBlockStore::new();
+        let b1 = make_block(1, BlockHash::GENESIS);
+        let b2 = make_block(2, b1.hash);
+        store.put_block(b1);
+        store.put_block(b2);
+        assert_eq!(store.tip_height(), Height(2));
     }
 
     #[test]

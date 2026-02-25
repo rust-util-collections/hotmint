@@ -7,6 +7,7 @@ pub mod evidence;
 pub mod message;
 pub mod validator;
 pub mod validator_update;
+pub mod sync;
 pub mod view;
 pub mod vote;
 
@@ -19,5 +20,6 @@ pub use evidence::EquivocationProof;
 pub use message::ConsensusMessage;
 pub use validator::{ValidatorId, ValidatorInfo, ValidatorSet};
 pub use validator_update::{EndBlockResponse, ValidatorUpdate};
+pub use sync::{SyncRequest, SyncResponse};
 pub use view::ViewNumber;
 pub use vote::{Vote, VoteType};

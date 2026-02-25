@@ -3,6 +3,7 @@ use ruc::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::RwLock;
 
 use hotmint_consensus::application::Application;
 use hotmint_consensus::engine::ConsensusEngine;
@@ -72,7 +73,9 @@ fn spawn_network(n: u64) -> (Vec<Arc<AtomicU64>>, Vec<tokio::task::JoinHandle<()
             .collect();
 
         let network = ChannelNetwork::new(vid, senders);
-        let store = MemoryBlockStore::new();
+        let store = Arc::new(RwLock::new(
+            Box::new(MemoryBlockStore::new()) as Box<dyn hotmint_consensus::store::BlockStore>
+        ));
         let commit_count = Arc::new(AtomicU64::new(0));
         counters.push(commit_count.clone());
         let app = TestApp {
@@ -83,7 +86,7 @@ fn spawn_network(n: u64) -> (Vec<Arc<AtomicU64>>, Vec<tokio::task::JoinHandle<()
 
         let engine = ConsensusEngine::new(
             state,
-            Box::new(store),
+            store,
             Box::new(network),
             Box::new(app),
             Box::new(signer),

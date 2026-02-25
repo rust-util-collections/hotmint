@@ -40,14 +40,42 @@ impl RpcResponse {
     }
 }
 
-/// Status info returned by the status endpoint
-#[derive(Debug, Serialize)]
+/// Consensus status info
+#[derive(Debug, Clone, Serialize)]
 pub struct StatusInfo {
     pub validator_id: u64,
     pub current_view: u64,
     pub last_committed_height: u64,
     pub epoch: u64,
+    pub validator_count: usize,
     pub mempool_size: usize,
+}
+
+/// Block info returned by get_block / get_block_by_hash
+#[derive(Debug, Serialize)]
+pub struct BlockInfo {
+    pub height: u64,
+    pub hash: String,
+    pub parent_hash: String,
+    pub view: u64,
+    pub proposer: u64,
+    pub payload_size: usize,
+}
+
+/// Validator info returned by get_validators
+#[derive(Debug, Serialize)]
+pub struct ValidatorInfoResponse {
+    pub id: u64,
+    pub power: u64,
+    pub public_key: String,
+}
+
+/// Epoch info returned by get_epoch
+#[derive(Debug, Serialize)]
+pub struct EpochInfo {
+    pub number: u64,
+    pub start_view: u64,
+    pub validator_count: usize,
 }
 
 /// Transaction submission result

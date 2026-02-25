@@ -51,4 +51,18 @@ impl BlockStore for VsdbBlockStore {
             .get(&h.as_u64())
             .and_then(|hash_bytes| self.by_hash.get(&hash_bytes))
     }
+
+    fn get_blocks_in_range(&self, from: Height, to: Height) -> Vec<Block> {
+        self.by_height
+            .range(from.as_u64()..=to.as_u64())
+            .filter_map(|(_, hash_bytes)| self.by_hash.get(&hash_bytes))
+            .collect()
+    }
+
+    fn tip_height(&self) -> Height {
+        self.by_height
+            .last()
+            .map(|(h, _)| Height(h))
+            .unwrap_or(Height::GENESIS)
+    }
 }

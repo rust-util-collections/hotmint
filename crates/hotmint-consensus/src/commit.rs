@@ -15,7 +15,7 @@ pub struct CommitResult {
 }
 
 /// Decode length-prefixed transactions from a block payload.
-fn decode_payload(payload: &[u8]) -> Vec<&[u8]> {
+pub fn decode_payload(payload: &[u8]) -> Vec<&[u8]> {
     let mut txs = Vec::new();
     let mut offset = 0;
     while offset + 4 <= payload.len() {

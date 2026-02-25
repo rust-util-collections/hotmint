@@ -1,5 +1,7 @@
 use ruc::*;
 
+use std::sync::{Arc, RwLock};
+
 use crate::application::Application;
 use crate::commit::try_commit;
 use crate::leader;
@@ -16,9 +18,12 @@ use hotmint_types::*;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
+/// Shared block store type used by the engine, RPC, and sync responder.
+pub type SharedBlockStore = Arc<RwLock<Box<dyn BlockStore>>>;
+
 pub struct ConsensusEngine {
     state: ConsensusState,
-    store: Box<dyn BlockStore>,
+    store: SharedBlockStore,
     network: Box<dyn NetworkSink>,
     app: Box<dyn Application>,
     signer: Box<dyn Signer>,
@@ -36,7 +41,7 @@ pub struct ConsensusEngine {
 impl ConsensusEngine {
     pub fn new(
         state: ConsensusState,
-        store: Box<dyn BlockStore>,
+        store: SharedBlockStore,
         network: Box<dyn NetworkSink>,
         app: Box<dyn Application>,
         signer: Box<dyn Signer>,
@@ -108,14 +113,16 @@ impl ConsensusEngine {
     }
 
     fn try_propose(&mut self) {
+        let mut store = self.store.write().unwrap();
         match view_protocol::propose(
             &mut self.state,
-            self.store.as_mut(),
+            store.as_mut(),
             self.network.as_ref(),
             self.app.as_ref(),
             self.signer.as_ref(),
         ) {
             Ok(block) => {
+                drop(store);
                 // Leader votes for its own block
                 self.leader_self_vote(block.hash);
             }
@@ -169,9 +176,10 @@ impl ConsensusEngine {
                 if block.view > self.state.current_view {
                     if let Some(ref dc) = double_cert {
                         // Fast-forward via double cert
+                        let store = self.store.read().unwrap();
                         match try_commit(
                             dc,
-                            self.store.as_ref(),
+                            store.as_ref(),
                             self.app.as_ref(),
                             &mut self.state.last_committed_height,
                             &self.state.current_epoch,
@@ -185,6 +193,7 @@ impl ConsensusEngine {
                                 warn!(error = %e, "try_commit failed during fast-forward");
                             }
                         }
+                        drop(store);
                         self.state.highest_double_cert = Some(dc.clone());
                         self.advance_view_to(
                             block.view,
@@ -197,17 +206,19 @@ impl ConsensusEngine {
                     return Ok(());
                 }
 
+                let mut store = self.store.write().unwrap();
                 let maybe_pending = view_protocol::on_proposal(
                     &mut self.state,
                     block,
                     justify,
                     double_cert,
-                    self.store.as_mut(),
+                    store.as_mut(),
                     self.network.as_ref(),
                     self.app.as_ref(),
                     self.signer.as_ref(),
                 )
                 .c(d!())?;
+                drop(store);
 
                 if let Some(epoch) = maybe_pending {
                     self.pending_epoch = Some(epoch);
@@ -414,20 +425,23 @@ impl ConsensusEngine {
         );
 
         // Commit
-        match try_commit(
-            &dc,
-            self.store.as_ref(),
-            self.app.as_ref(),
-            &mut self.state.last_committed_height,
-            &self.state.current_epoch,
-        ) {
-            Ok(result) => {
-                if result.pending_epoch.is_some() {
-                    self.pending_epoch = result.pending_epoch;
+        {
+            let store = self.store.read().unwrap();
+            match try_commit(
+                &dc,
+                store.as_ref(),
+                self.app.as_ref(),
+                &mut self.state.last_committed_height,
+                &self.state.current_epoch,
+            ) {
+                Ok(result) => {
+                    if result.pending_epoch.is_some() {
+                        self.pending_epoch = result.pending_epoch;
+                    }
                 }
-            }
-            Err(e) => {
-                warn!(error = %e, "try_commit failed in double cert handler");
+                Err(e) => {
+                    warn!(error = %e, "try_commit failed in double cert handler");
+                }
             }
         }
 

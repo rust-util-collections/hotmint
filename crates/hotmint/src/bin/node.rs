@@ -2,6 +2,7 @@ use ruc::*;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 
 use hotmint::consensus::application::Application;
 use hotmint::consensus::engine::ConsensusEngine;
@@ -96,7 +97,9 @@ async fn main() {
             .collect();
 
         let network = ChannelNetwork::new(vid, senders);
-        let store = MemoryBlockStore::new();
+        let store = Arc::new(RwLock::new(
+            Box::new(MemoryBlockStore::new()) as Box<dyn hotmint::consensus::store::BlockStore>
+        ));
         let app = CountingApp {
             validator_id: vid,
             commit_count: AtomicU64::new(0),
@@ -106,7 +109,7 @@ async fn main() {
 
         let engine = ConsensusEngine::new(
             state,
-            Box::new(store),
+            store,
             Box::new(network),
             Box::new(app),
             Box::new(signer),

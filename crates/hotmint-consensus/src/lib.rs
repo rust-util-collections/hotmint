@@ -8,6 +8,7 @@ pub mod network;
 pub mod pacemaker;
 pub mod state;
 pub mod store;
+pub mod sync;
 pub mod view_protocol;
 pub mod vote_collector;
 
