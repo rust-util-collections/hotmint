@@ -34,6 +34,8 @@
 //! }
 //! ```
 
+pub mod config;
+
 /// Core data types: Block, Vote, QC, ValidatorSet, ConsensusMessage, etc.
 pub use hotmint_types as types;
 

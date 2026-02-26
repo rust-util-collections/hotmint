@@ -43,17 +43,17 @@ Each view follows a 5-step protocol: Enter → Propose → Vote → Prepare (QC)
 
 ## Architecture
 
-```
-hotmint (library facade — re-exports everything)
-  ├── hotmint-types      core data types (Block, QC, Vote, ValidatorSet, ...)
-  ├── hotmint-crypto     Ed25519 signing + Blake3 hashing
-  ├── hotmint-consensus  consensus state machine (engine, pacemaker, vote collector)
-  ├── hotmint-abci       IPC proxy for out-of-process applications (Unix socket)
-  ├── hotmint-storage    persistent storage (vsdb)
-  ├── hotmint-network    P2P networking (litep2p)
-  ├── hotmint-mempool    transaction mempool (FIFO, dedup)
-  └── hotmint-api        JSON-RPC server
-```
+| Crate | Description | Version |
+|:------|:------------|:--------|
+| [hotmint](https://crates.io/crates/hotmint) | Library facade (re-exports everything) | [![crates.io](https://img.shields.io/crates/v/hotmint.svg)](https://crates.io/crates/hotmint) |
+| [hotmint-types](https://crates.io/crates/hotmint-types) | Core data types (Block, QC, Vote, ValidatorSet, ...) | [![crates.io](https://img.shields.io/crates/v/hotmint-types.svg)](https://crates.io/crates/hotmint-types) |
+| [hotmint-crypto](https://crates.io/crates/hotmint-crypto) | Ed25519 signing + Blake3 hashing | [![crates.io](https://img.shields.io/crates/v/hotmint-crypto.svg)](https://crates.io/crates/hotmint-crypto) |
+| [hotmint-consensus](https://crates.io/crates/hotmint-consensus) | Consensus state machine (engine, pacemaker, vote collector) | [![crates.io](https://img.shields.io/crates/v/hotmint-consensus.svg)](https://crates.io/crates/hotmint-consensus) |
+| [hotmint-abci](https://crates.io/crates/hotmint-abci) | IPC proxy for out-of-process applications (Unix socket) | [![crates.io](https://img.shields.io/crates/v/hotmint-abci.svg)](https://crates.io/crates/hotmint-abci) |
+| [hotmint-storage](https://crates.io/crates/hotmint-storage) | Persistent storage (vsdb) | [![crates.io](https://img.shields.io/crates/v/hotmint-storage.svg)](https://crates.io/crates/hotmint-storage) |
+| [hotmint-network](https://crates.io/crates/hotmint-network) | P2P networking (litep2p) | [![crates.io](https://img.shields.io/crates/v/hotmint-network.svg)](https://crates.io/crates/hotmint-network) |
+| [hotmint-mempool](https://crates.io/crates/hotmint-mempool) | Transaction mempool (FIFO, dedup) | [![crates.io](https://img.shields.io/crates/v/hotmint-mempool.svg)](https://crates.io/crates/hotmint-mempool) |
+| [hotmint-api](https://crates.io/crates/hotmint-api) | JSON-RPC server | [![crates.io](https://img.shields.io/crates/v/hotmint-api.svg)](https://crates.io/crates/hotmint-api) |
 
 The consensus engine is decoupled from all I/O through four pluggable traits:
 

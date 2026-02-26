@@ -91,6 +91,7 @@ fn spawn_network(n: u64) -> (Vec<Arc<AtomicU64>>, Vec<tokio::task::JoinHandle<()
             Box::new(app),
             Box::new(signer),
             rx,
+            None,
         );
 
         handles.push(tokio::spawn(async move { engine.run().await }));

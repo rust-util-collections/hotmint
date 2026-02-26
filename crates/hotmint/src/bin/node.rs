@@ -1,126 +1,325 @@
 use ruc::*;
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
-use hotmint::consensus::application::Application;
-use hotmint::consensus::engine::ConsensusEngine;
-use hotmint::consensus::network::ChannelNetwork;
-use hotmint::consensus::state::ConsensusState;
-use hotmint::consensus::store::MemoryBlockStore;
-use hotmint::crypto::Ed25519Signer;
-use hotmint::prelude::*;
-use tokio::sync::mpsc;
+use clap::{Parser, Subcommand};
+use tokio::sync::watch;
 use tracing::{Level, info};
 
-const NUM_VALIDATORS: u64 = 4;
+use hotmint::abci::client::IpcApplicationClient;
+use hotmint::config::{self, GenesisDoc, NodeConfig, PrivValidatorKey};
+use hotmint::consensus::application::Application;
+use hotmint::consensus::engine::ConsensusEngine;
+use hotmint::consensus::pacemaker::PacemakerConfig;
+use hotmint::consensus::state::ConsensusState;
+use hotmint::consensus::store::BlockStore;
+use hotmint::crypto::Ed25519Signer;
+use hotmint::mempool::Mempool;
+use hotmint::network::service::{NetworkService, PeerMap};
+use hotmint::prelude::*;
+use hotmint::storage::block_store::VsdbBlockStore;
+use hotmint::storage::consensus_state::PersistentConsensusState;
 
-struct CountingApp {
-    validator_id: ValidatorId,
-    commit_count: AtomicU64,
+#[derive(Parser)]
+#[command(name = "hotmint-node", about = "Hotmint BFT consensus node")]
+struct Cli {
+    /// Path to hotmint home directory.
+    #[arg(long, global = true)]
+    home: Option<String>,
+
+    #[command(subcommand)]
+    command: Command,
 }
 
-impl Application for CountingApp {
-    fn on_commit(&self, block: &Block, _ctx: &BlockContext) -> Result<()> {
-        let count = self.commit_count.fetch_add(1, Ordering::Relaxed) + 1;
-        info!(
-            validator = %self.validator_id,
-            height = block.height.as_u64(),
-            hash = %block.hash,
-            total_commits = count,
-            "block committed"
-        );
-        Ok(())
-    }
+#[derive(Subcommand)]
+enum Command {
+    /// Initialize a new node directory.
+    Init,
+    /// Run the consensus node.
+    Node {
+        /// Override ABCI application socket path.
+        #[arg(long)]
+        proxy_app: Option<String>,
+        /// Override P2P listen address (multiaddr).
+        #[arg(long)]
+        p2p_laddr: Option<String>,
+        /// Override JSON-RPC listen address.
+        #[arg(long)]
+        rpc_laddr: Option<String>,
+    },
 }
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_max_level(Level::INFO)
-        .with_target(false)
-        .init();
+    let cli = Cli::parse();
+    let home = config::resolve_home(cli.home.as_deref());
 
-    info!("starting hotmint with {} validators", NUM_VALIDATORS);
-
-    let mut signers: Vec<Option<Ed25519Signer>> = (0..NUM_VALIDATORS)
-        .map(|i| Some(Ed25519Signer::generate(ValidatorId(i))))
-        .collect();
-
-    let validator_infos: Vec<ValidatorInfo> = signers
-        .iter()
-        .enumerate()
-        .map(|(i, s)| {
-            let s = s.as_ref().unwrap();
-            ValidatorInfo {
-                id: ValidatorId(i as u64),
-                public_key: Signer::public_key(s),
-                power: 1,
+    match cli.command {
+        Command::Init => {
+            if let Err(e) = config::init_node_dir(&home) {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
             }
-        })
-        .collect();
-    let validator_set = ValidatorSet::new(validator_infos);
+        }
+        Command::Node {
+            proxy_app,
+            p2p_laddr,
+            rpc_laddr,
+        } => {
+            tracing_subscriber::fmt()
+                .with_max_level(Level::INFO)
+                .with_target(false)
+                .init();
+
+            if let Err(e) = run_node(&home, proxy_app, p2p_laddr, rpc_laddr).await {
+                eprintln!("Fatal: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
+async fn run_node(
+    home: &std::path::Path,
+    proxy_app_override: Option<String>,
+    p2p_laddr_override: Option<String>,
+    rpc_laddr_override: Option<String>,
+) -> Result<()> {
+    let config_dir = home.join("config");
+    let data_dir = home.join("data");
+
+    // 1. Load config
+    let mut config = NodeConfig::load(&config_dir.join("config.toml")).c(d!(
+        "failed to load config.toml — run `hotmint-node init` first"
+    ))?;
+
+    // Apply CLI overrides
+    if let Some(pa) = proxy_app_override {
+        config.proxy_app = pa;
+    }
+    if let Some(pl) = p2p_laddr_override {
+        config.p2p.laddr = pl;
+    }
+    if let Some(rl) = rpc_laddr_override {
+        config.rpc.laddr = rl;
+    }
+
+    // 2. Load private key
+    let priv_key = PrivValidatorKey::load(&config_dir.join("priv_validator_key.json"))
+        .c(d!("failed to load priv_validator_key.json"))?;
+    let signing_key = priv_key.to_signing_key()?;
+    let litep2p_keypair = priv_key.to_litep2p_keypair()?;
+
+    // 3. Load genesis
+    let genesis =
+        GenesisDoc::load(&config_dir.join("genesis.json")).c(d!("failed to load genesis.json"))?;
+    let validator_set = genesis.to_validator_set()?;
+
+    // 4. Find our validator ID
+    let our_pk_hex = &priv_key.public_key;
+    let our_gv = genesis
+        .validators
+        .iter()
+        .find(|v| &v.public_key == our_pk_hex)
+        .ok_or_else(|| eg!("this node's public key not found in genesis validator set"))?;
+    let our_vid = ValidatorId(our_gv.id);
 
     info!(
-        validators = NUM_VALIDATORS,
+        validator_id = %our_vid,
+        validators = validator_set.validator_count(),
         quorum = validator_set.quorum_threshold(),
-        max_faulty_power = validator_set.max_faulty_power(),
-        "validator set created"
+        "starting hotmint node"
     );
 
-    let mut receivers = HashMap::new();
-    let mut all_senders: HashMap<
-        ValidatorId,
-        mpsc::UnboundedSender<(ValidatorId, ConsensusMessage)>,
-    > = HashMap::new();
+    // 5. Set up persistent storage
+    std::fs::create_dir_all(&data_dir).c(d!("create data dir"))?;
+    vsdb::vsdb_set_base_dir(&data_dir).c(d!("set vsdb base dir"))?;
 
-    for i in 0..NUM_VALIDATORS {
-        let (tx, rx) = mpsc::unbounded_channel();
-        let vid = ValidatorId(i);
-        receivers.insert(vid, rx);
-        all_senders.insert(vid, tx);
+    let store: Arc<RwLock<Box<dyn BlockStore>>> =
+        Arc::new(RwLock::new(Box::new(VsdbBlockStore::new())));
+
+    // 6. Restore consensus state
+    let pcs = PersistentConsensusState::new();
+    let mut state = ConsensusState::new(our_vid, validator_set.clone());
+    if let Some(view) = pcs.load_current_view() {
+        state.current_view = view;
+    }
+    if let Some(qc) = pcs.load_locked_qc() {
+        state.locked_qc = Some(qc);
+    }
+    if let Some(qc) = pcs.load_highest_qc() {
+        state.highest_qc = Some(qc);
+    }
+    if let Some(h) = pcs.load_last_committed_height() {
+        state.last_committed_height = h;
+    }
+    if let Some(epoch) = pcs.load_current_epoch() {
+        state.validator_set = epoch.validator_set.clone();
+        state.current_epoch = epoch;
     }
 
-    let mut handles = Vec::new();
+    // 7. Parse peers and create network
+    let (peer_map, known_addresses) = if config.p2p.persistent_peers.is_empty() {
+        (PeerMap::new(), vec![])
+    } else {
+        config::parse_persistent_peers(&config.p2p.persistent_peers, &genesis)?
+    };
 
-    for i in 0..NUM_VALIDATORS {
-        let vid = ValidatorId(i);
-        let rx = pnk!(receivers.remove(&vid));
+    let listen_addr: litep2p::types::multiaddr::Multiaddr = config
+        .p2p
+        .laddr
+        .parse()
+        .c(d!("invalid p2p listen address: {}", config.p2p.laddr))?;
 
-        let senders: Vec<(
-            ValidatorId,
-            mpsc::UnboundedSender<(ValidatorId, ConsensusMessage)>,
-        )> = all_senders
-            .iter()
-            .map(|(&id, tx)| (id, tx.clone()))
-            .collect();
+    let (network_service, network_sink, msg_rx, sync_req_rx, _sync_resp_rx, peer_info_rx) =
+        NetworkService::create(
+            listen_addr,
+            peer_map,
+            known_addresses,
+            Some(litep2p_keypair),
+        )?;
 
-        let network = ChannelNetwork::new(vid, senders);
-        let store = Arc::new(RwLock::new(
-            Box::new(MemoryBlockStore::new()) as Box<dyn hotmint::consensus::store::BlockStore>
+    // 8. Create ABCI application client
+    let proxy_path = config
+        .proxy_app
+        .strip_prefix("unix://")
+        .unwrap_or(&config.proxy_app);
+    let ipc_client = IpcApplicationClient::new(proxy_path);
+
+    // 9. Wrap with status channel for RPC
+    let (status_tx, status_rx) = watch::channel((
+        0u64,
+        state.last_committed_height.as_u64(),
+        0u64,
+        validator_set.validator_count(),
+    ));
+    let app = AppWithStatus {
+        inner: ipc_client,
+        status_tx,
+    };
+
+    // 10. Create mempool
+    let mempool = Arc::new(Mempool::new(
+        config.mempool.max_txs,
+        config.mempool.max_tx_bytes,
+    ));
+
+    // 11. Create RPC server
+    let rpc_state = hotmint::api::rpc::RpcState {
+        validator_id: our_vid.0,
+        mempool: mempool.clone(),
+        status_rx,
+        store: store.clone(),
+        peer_info_rx,
+    };
+    let rpc_server = hotmint::api::rpc::RpcServer::bind(&config.rpc.laddr, rpc_state)
+        .await
+        .c(d!("failed to bind RPC server"))?;
+
+    info!(rpc_addr = %config.rpc.laddr, "RPC server listening");
+
+    // 12. Create consensus engine
+    let signer = Ed25519Signer::new(signing_key, our_vid);
+    let pacemaker_config = PacemakerConfig {
+        base_timeout_ms: config.consensus.base_timeout_ms,
+        max_timeout_ms: config.consensus.max_timeout_ms,
+        backoff_multiplier: config.consensus.backoff_multiplier,
+    };
+    let sync_sink = network_sink.clone();
+    let engine = ConsensusEngine::new(
+        state,
+        store.clone(),
+        Box::new(network_sink),
+        Box::new(app),
+        Box::new(signer),
+        msg_rx,
+        Some(pacemaker_config),
+    );
+
+    // 13. Spawn background tasks
+    tokio::spawn(async move { network_service.run().await });
+    tokio::spawn(async move { rpc_server.run().await });
+
+    // Sync responder: answer incoming sync requests from peers
+    {
+        let store = store.clone();
+        let mut sync_req_rx = sync_req_rx;
+        tokio::spawn(async move {
+            use hotmint_types::sync::{SyncRequest, SyncResponse};
+            while let Some(req) = sync_req_rx.recv().await {
+                let resp = match req.request {
+                    SyncRequest::GetStatus => {
+                        let h = store.read().unwrap().tip_height();
+                        SyncResponse::Status {
+                            last_committed_height: h,
+                            current_view: ViewNumber(0),
+                            epoch: EpochNumber(0),
+                        }
+                    }
+                    SyncRequest::GetBlocks {
+                        from_height,
+                        to_height,
+                    } => {
+                        let blocks = store
+                            .read()
+                            .unwrap()
+                            .get_blocks_in_range(from_height, to_height);
+                        SyncResponse::Blocks(blocks)
+                    }
+                };
+                sync_sink.send_sync_response(req.request_id, &resp);
+            }
+        });
+    }
+
+    info!("consensus engine starting");
+
+    // 14. Run consensus engine (blocks forever)
+    engine.run().await;
+
+    Ok(())
+}
+
+/// Wrapper that implements `Application` by delegating to the IPC client,
+/// while also updating the RPC status watch channel on each commit.
+struct AppWithStatus {
+    inner: IpcApplicationClient,
+    status_tx: watch::Sender<(u64, u64, u64, usize)>,
+}
+
+impl Application for AppWithStatus {
+    fn create_payload(&self, ctx: &BlockContext) -> Vec<u8> {
+        self.inner.create_payload(ctx)
+    }
+
+    fn validate_block(&self, block: &Block, ctx: &BlockContext) -> bool {
+        self.inner.validate_block(block, ctx)
+    }
+
+    fn validate_tx(&self, tx: &[u8], ctx: Option<&hotmint_types::context::TxContext>) -> bool {
+        self.inner.validate_tx(tx, ctx)
+    }
+
+    fn execute_block(&self, txs: &[&[u8]], ctx: &BlockContext) -> Result<EndBlockResponse> {
+        self.inner.execute_block(txs, ctx)
+    }
+
+    fn on_commit(&self, block: &Block, ctx: &BlockContext) -> Result<()> {
+        self.inner.on_commit(block, ctx)?;
+        let _ = self.status_tx.send((
+            ctx.view.as_u64(),
+            ctx.height.as_u64(),
+            ctx.epoch.as_u64(),
+            ctx.validator_set.validator_count(),
         ));
-        let app = CountingApp {
-            validator_id: vid,
-            commit_count: AtomicU64::new(0),
-        };
-        let signer = pnk!(signers[i as usize].take());
-        let state = ConsensusState::new(vid, validator_set.clone());
-
-        let engine = ConsensusEngine::new(
-            state,
-            store,
-            Box::new(network),
-            Box::new(app),
-            Box::new(signer),
-            rx,
-        );
-
-        handles.push(tokio::spawn(async move { engine.run().await }));
+        Ok(())
     }
 
-    info!("all validators spawned, consensus running...");
+    fn on_evidence(&self, proof: &EquivocationProof) -> Result<()> {
+        self.inner.on_evidence(proof)
+    }
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-    info!("shutting down after 30 seconds");
+    fn query(&self, path: &str, data: &[u8]) -> Result<Vec<u8>> {
+        self.inner.query(path, data)
+    }
 }

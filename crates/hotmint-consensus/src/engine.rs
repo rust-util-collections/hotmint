@@ -6,7 +6,7 @@ use crate::application::Application;
 use crate::commit::try_commit;
 use crate::leader;
 use crate::network::NetworkSink;
-use crate::pacemaker::Pacemaker;
+use crate::pacemaker::{Pacemaker, PacemakerConfig};
 use crate::state::{ConsensusState, ViewStep};
 use crate::store::BlockStore;
 use crate::view_protocol::{self, ViewEntryTrigger};
@@ -29,6 +29,7 @@ pub struct ConsensusEngine {
     signer: Box<dyn Signer>,
     vote_collector: VoteCollector,
     pacemaker: Pacemaker,
+    pacemaker_config: PacemakerConfig,
     msg_rx: mpsc::UnboundedReceiver<(ValidatorId, ConsensusMessage)>,
     /// Collected status certs from replicas (for leader)
     status_count: usize,
@@ -46,7 +47,9 @@ impl ConsensusEngine {
         app: Box<dyn Application>,
         signer: Box<dyn Signer>,
         msg_rx: mpsc::UnboundedReceiver<(ValidatorId, ConsensusMessage)>,
+        pacemaker_config: Option<PacemakerConfig>,
     ) -> Self {
+        let pc = pacemaker_config.unwrap_or_default();
         Self {
             state,
             store,
@@ -54,7 +57,8 @@ impl ConsensusEngine {
             app,
             signer,
             vote_collector: VoteCollector::new(),
-            pacemaker: Pacemaker::new(),
+            pacemaker: Pacemaker::with_config(pc.clone()),
+            pacemaker_config: pc,
             msg_rx,
             status_count: 0,
             current_view_qc: None,
@@ -539,7 +543,7 @@ impl ConsensusEngine {
             self.state.current_epoch = new_epoch;
             // Full clear: old votes/wishes are from the previous epoch's validator set
             self.vote_collector = VoteCollector::new();
-            self.pacemaker = Pacemaker::new();
+            self.pacemaker = Pacemaker::with_config(self.pacemaker_config.clone());
         }
 
         view_protocol::enter_view(

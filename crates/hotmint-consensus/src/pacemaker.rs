@@ -12,8 +12,27 @@ const BASE_TIMEOUT_MS: u64 = 2000;
 const MAX_TIMEOUT_MS: u64 = 30000;
 const BACKOFF_MULTIPLIER: f64 = 1.5;
 
+/// Configurable pacemaker parameters.
+#[derive(Debug, Clone)]
+pub struct PacemakerConfig {
+    pub base_timeout_ms: u64,
+    pub max_timeout_ms: u64,
+    pub backoff_multiplier: f64,
+}
+
+impl Default for PacemakerConfig {
+    fn default() -> Self {
+        Self {
+            base_timeout_ms: BASE_TIMEOUT_MS,
+            max_timeout_ms: MAX_TIMEOUT_MS,
+            backoff_multiplier: BACKOFF_MULTIPLIER,
+        }
+    }
+}
+
 /// Full pacemaker with exponential backoff and TC relay
 pub struct Pacemaker {
+    config: PacemakerConfig,
     pub view_deadline: Instant,
     base_timeout: Duration,
     current_timeout: Duration,
@@ -33,8 +52,13 @@ impl Default for Pacemaker {
 
 impl Pacemaker {
     pub fn new() -> Self {
-        let base_timeout = Duration::from_millis(BASE_TIMEOUT_MS);
+        Self::with_config(PacemakerConfig::default())
+    }
+
+    pub fn with_config(config: PacemakerConfig) -> Self {
+        let base_timeout = Duration::from_millis(config.base_timeout_ms);
         Self {
+            config,
             view_deadline: Instant::now() + base_timeout,
             base_timeout,
             current_timeout: base_timeout,
@@ -59,9 +83,12 @@ impl Pacemaker {
     /// Increase timeout with exponential backoff after a timeout event
     pub fn on_timeout(&mut self) {
         self.consecutive_timeouts += 1;
-        let multiplier = BACKOFF_MULTIPLIER.powi(self.consecutive_timeouts as i32);
+        let multiplier = self
+            .config
+            .backoff_multiplier
+            .powi(self.consecutive_timeouts as i32);
         let new_ms = (self.base_timeout.as_millis() as f64 * multiplier) as u64;
-        self.current_timeout = Duration::from_millis(new_ms.min(MAX_TIMEOUT_MS));
+        self.current_timeout = Duration::from_millis(new_ms.min(self.config.max_timeout_ms));
         debug!(
             consecutive = self.consecutive_timeouts,
             timeout_ms = self.current_timeout.as_millis() as u64,

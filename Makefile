@@ -35,7 +35,13 @@ bench-e2e:
 	$(CARGO) run --release --bin hotmint-bench-e2e
 
 run:
-	$(CARGO) run --bin hotmint-node
+	$(CARGO) run --bin hotmint-node -- node
+
+demo:
+	$(CARGO) run --bin hotmint-demo
+
+init:
+	$(CARGO) run --bin hotmint-node -- init
 
 check:
 	$(CARGO) check --workspace --all-targets

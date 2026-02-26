@@ -1,19 +1,8 @@
-//! End-to-end throughput benchmark for the Hotmint consensus network.
-//!
-//! Spawns N in-process validators using channel networking and measures:
-//! - Block commit rate (blocks/sec)
-//! - Average time per committed block
-//! - Total blocks committed across all validators
-//!
-//! Usage: cargo run --release --bin hotmint-bench-e2e
-
 use ruc::*;
 
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::sync::{Arc, RwLock};
 
 use hotmint::consensus::application::Application;
 use hotmint::consensus::engine::ConsensusEngine;
@@ -23,27 +12,37 @@ use hotmint::consensus::store::MemoryBlockStore;
 use hotmint::crypto::Ed25519Signer;
 use hotmint::prelude::*;
 use tokio::sync::mpsc;
+use tracing::{Level, info};
 
 const NUM_VALIDATORS: u64 = 4;
-const DURATION_SECS: u64 = 10;
 
-struct BenchApp {
-    commit_count: Arc<AtomicU64>,
+struct CountingApp {
+    validator_id: ValidatorId,
+    commit_count: AtomicU64,
 }
 
-impl Application for BenchApp {
-    fn on_commit(&self, _block: &Block, _ctx: &BlockContext) -> Result<()> {
-        self.commit_count.fetch_add(1, Ordering::Relaxed);
+impl Application for CountingApp {
+    fn on_commit(&self, block: &Block, _ctx: &BlockContext) -> Result<()> {
+        let count = self.commit_count.fetch_add(1, Ordering::Relaxed) + 1;
+        info!(
+            validator = %self.validator_id,
+            height = block.height.as_u64(),
+            hash = %block.hash,
+            total_commits = count,
+            "block committed"
+        );
         Ok(())
     }
 }
 
 #[tokio::main]
 async fn main() {
-    println!("=== Hotmint E2E Throughput Benchmark ===");
-    println!("validators: {NUM_VALIDATORS}");
-    println!("duration:   {DURATION_SECS}s");
-    println!();
+    tracing_subscriber::fmt()
+        .with_max_level(Level::INFO)
+        .with_target(false)
+        .init();
+
+    info!("starting hotmint with {} validators", NUM_VALIDATORS);
 
     let mut signers: Vec<Option<Ed25519Signer>> = (0..NUM_VALIDATORS)
         .map(|i| Some(Ed25519Signer::generate(ValidatorId(i))))
@@ -63,6 +62,13 @@ async fn main() {
         .collect();
     let validator_set = ValidatorSet::new(validator_infos);
 
+    info!(
+        validators = NUM_VALIDATORS,
+        quorum = validator_set.quorum_threshold(),
+        max_faulty_power = validator_set.max_faulty_power(),
+        "validator set created"
+    );
+
     let mut receivers = HashMap::new();
     let mut all_senders: HashMap<
         ValidatorId,
@@ -71,16 +77,17 @@ async fn main() {
 
     for i in 0..NUM_VALIDATORS {
         let (tx, rx) = mpsc::unbounded_channel();
-        receivers.insert(ValidatorId(i), rx);
-        all_senders.insert(ValidatorId(i), tx);
+        let vid = ValidatorId(i);
+        receivers.insert(vid, rx);
+        all_senders.insert(vid, tx);
     }
 
-    let mut commit_counters = Vec::new();
     let mut handles = Vec::new();
 
     for i in 0..NUM_VALIDATORS {
         let vid = ValidatorId(i);
         let rx = pnk!(receivers.remove(&vid));
+
         let senders: Vec<(
             ValidatorId,
             mpsc::UnboundedSender<(ValidatorId, ConsensusMessage)>,
@@ -93,10 +100,9 @@ async fn main() {
         let store = Arc::new(RwLock::new(
             Box::new(MemoryBlockStore::new()) as Box<dyn hotmint::consensus::store::BlockStore>
         ));
-        let commit_count = Arc::new(AtomicU64::new(0));
-        commit_counters.push(commit_count.clone());
-        let app = BenchApp {
-            commit_count: commit_count.clone(),
+        let app = CountingApp {
+            validator_id: vid,
+            commit_count: AtomicU64::new(0),
         };
         let signer = pnk!(signers[i as usize].take());
         let state = ConsensusState::new(vid, validator_set.clone());
@@ -114,39 +120,8 @@ async fn main() {
         handles.push(tokio::spawn(async move { engine.run().await }));
     }
 
-    let start = Instant::now();
-    tokio::time::sleep(tokio::time::Duration::from_secs(DURATION_SECS)).await;
-    let elapsed = start.elapsed();
+    info!("all validators spawned, consensus running...");
 
-    // Collect results
-    let counts: Vec<u64> = commit_counters
-        .iter()
-        .map(|c| c.load(Ordering::Relaxed))
-        .collect();
-
-    let min_commits = *counts.iter().min().unwrap();
-    let max_commits = *counts.iter().max().unwrap();
-    let avg_commits = counts.iter().sum::<u64>() / NUM_VALIDATORS;
-
-    let blocks_per_sec = min_commits as f64 / elapsed.as_secs_f64();
-    let ms_per_block = if min_commits > 0 {
-        elapsed.as_millis() as f64 / min_commits as f64
-    } else {
-        f64::INFINITY
-    };
-
-    println!("=== Results ===");
-    println!("elapsed:         {:.2}s", elapsed.as_secs_f64());
-    println!("commits/node:    min={min_commits}  max={max_commits}  avg={avg_commits}");
-    println!("throughput:      {blocks_per_sec:.1} blocks/sec (by slowest node)");
-    println!("latency:         {ms_per_block:.1} ms/block");
-    println!();
-
-    for (i, count) in counts.iter().enumerate() {
-        println!("  V{i}: {count} blocks committed");
-    }
-
-    for h in handles {
-        h.abort();
-    }
+    tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+    info!("shutting down after 30 seconds");
 }

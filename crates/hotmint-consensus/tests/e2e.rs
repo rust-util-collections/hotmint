@@ -103,6 +103,7 @@ fn spawn_node(
         Box::new(app),
         Box::new(signer),
         rx,
+        None,
     );
 
     let handle = tokio::spawn(async move { engine.run().await });
@@ -495,6 +496,7 @@ async fn test_equivocation_detected_via_injected_votes() {
             Box::new(app),
             Box::new(signer),
             rx.take().unwrap(),
+            None,
         );
         handles.push(tokio::spawn(async move { engine.run().await }));
     }

@@ -117,6 +117,7 @@ impl NetworkService {
         listen_addr: Multiaddr,
         peer_map: PeerMap,
         known_addresses: Vec<(PeerId, Vec<Multiaddr>)>,
+        keypair: Option<litep2p::crypto::ed25519::Keypair>,
     ) -> Result<(
         Self,
         Litep2pNetworkSink,
@@ -148,6 +149,10 @@ impl NetworkService {
             .with_notification_protocol(notif_config)
             .with_request_response_protocol(reqresp_config)
             .with_request_response_protocol(sync_config);
+
+        if let Some(kp) = keypair {
+            config_builder = config_builder.with_keypair(kp);
+        }
 
         if !known_addresses.is_empty() {
             config_builder = config_builder.with_known_addresses(known_addresses.into_iter());
@@ -429,6 +434,7 @@ impl NetworkService {
 
 /// NetworkSink backed by litep2p, for use by the consensus engine.
 /// Also provides methods for peer management and sync.
+#[derive(Clone)]
 pub struct Litep2pNetworkSink {
     cmd_tx: mpsc::UnboundedSender<NetCommand>,
 }
