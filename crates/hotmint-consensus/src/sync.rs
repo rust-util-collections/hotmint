@@ -148,14 +148,10 @@ pub fn replay_blocks(
             validator_set: &current_epoch.validator_set,
         };
 
-        app.begin_block(&ctx)
-            .c(d!("begin_block failed during sync"))?;
-
-        for tx in commit::decode_payload(&block.payload) {
-            app.deliver_tx(tx).c(d!("deliver_tx failed during sync"))?;
-        }
-
-        let response = app.end_block(&ctx).c(d!("end_block failed during sync"))?;
+        let txs = commit::decode_payload(&block.payload);
+        let response = app
+            .execute_block(&txs, &ctx)
+            .c(d!("execute_block failed during sync"))?;
 
         app.on_commit(block, &ctx)
             .c(d!("on_commit failed during sync"))?;

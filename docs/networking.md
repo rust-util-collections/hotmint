@@ -266,7 +266,7 @@ network_sink.add_peer(
 network_sink.remove_peer(ValidatorId(4));
 ```
 
-These methods send commands through an internal channel to the `NetworkService`, which updates the `PeerMap` and peer info accordingly. This is typically used in conjunction with validator set changes triggered by `Application::end_block()` returning new `ValidatorUpdate` entries.
+These methods send commands through an internal channel to the `NetworkService`, which updates the `PeerMap` and peer info accordingly. This is typically used in conjunction with validator set changes triggered by `Application::execute_block()` returning new `ValidatorUpdate` entries.
 
 ## Block Synchronization
 

@@ -1,27 +1,34 @@
 use ruc::*;
 
 use hotmint_types::Block;
-use hotmint_types::context::BlockContext;
+use hotmint_types::context::{BlockContext, TxContext};
 use hotmint_types::evidence::EquivocationProof;
 use hotmint_types::validator_update::EndBlockResponse;
 
-/// ABCI-like application interface for the consensus engine.
+/// Application interface for the consensus engine.
 ///
 /// The lifecycle for each committed block:
-/// 1. `begin_block` — called at the start of block execution
-/// 2. `deliver_tx` — called for each transaction in the payload
-/// 3. `end_block` — called after all transactions; may return validator updates
-/// 4. `on_commit` — called when the block is finalized
+/// 1. `execute_block` — receives all decoded transactions at once; returns
+///    validator updates and events
+/// 2. `on_commit` — notification after the block is finalized
 ///
-/// For block validation (before voting, not yet committed):
+/// For block proposal:
+/// - `create_payload` — build the payload bytes for a new block
+///
+/// For validation (before voting):
 /// - `validate_block` — full block validation
 /// - `validate_tx` — individual transaction validation for mempool
 ///
 /// For evidence:
-/// - `on_evidence` — called when equivocation (double-voting) is detected
+/// - `on_evidence` — called when equivocation is detected
+///
+/// All methods have default no-op implementations.
 pub trait Application: Send + Sync {
     /// Create a payload for a new block proposal.
     /// Typically pulls transactions from the mempool.
+    ///
+    /// If your mempool is async, use `tokio::runtime::Handle::current().block_on(..)`
+    /// to bridge into this synchronous callback.
     fn create_payload(&self, _ctx: &BlockContext) -> Vec<u8> {
         vec![]
     }
@@ -32,28 +39,29 @@ pub trait Application: Send + Sync {
     }
 
     /// Validate a single transaction for mempool admission.
-    fn validate_tx(&self, _tx: &[u8]) -> bool {
+    ///
+    /// An optional [`TxContext`] provides the current chain height and epoch,
+    /// which can be useful for state-dependent validation (nonce checks, etc.).
+    fn validate_tx(&self, _tx: &[u8], _ctx: Option<&TxContext>) -> bool {
         true
     }
 
-    /// Called at the beginning of block execution (during commit).
-    fn begin_block(&self, _ctx: &BlockContext) -> Result<()> {
-        Ok(())
-    }
-
-    /// Called for each transaction in the block payload (during commit).
-    fn deliver_tx(&self, _tx: &[u8]) -> Result<()> {
-        Ok(())
-    }
-
-    /// Called after all transactions in the block are delivered (during commit).
-    /// Return `EndBlockResponse` with `validator_updates` to trigger an epoch transition.
-    fn end_block(&self, _ctx: &BlockContext) -> Result<EndBlockResponse> {
+    /// Execute an entire block in one call.
+    ///
+    /// Receives all decoded transactions from the block payload at once,
+    /// allowing batch-optimised processing (bulk DB writes, parallel
+    /// signature verification, etc.).
+    ///
+    /// Return [`EndBlockResponse`] with `validator_updates` to schedule an
+    /// epoch transition, and/or `events` to emit application-defined events.
+    fn execute_block(&self, _txs: &[&[u8]], _ctx: &BlockContext) -> Result<EndBlockResponse> {
         Ok(EndBlockResponse::default())
     }
 
-    /// Called when a block is committed to the chain.
-    fn on_commit(&self, block: &Block, ctx: &BlockContext) -> Result<()>;
+    /// Called when a block is committed to the chain (notification).
+    fn on_commit(&self, _block: &Block, _ctx: &BlockContext) -> Result<()> {
+        Ok(())
+    }
 
     /// Called when equivocation (double-voting) is detected.
     /// The application can use this to implement slashing.
@@ -67,11 +75,7 @@ pub trait Application: Send + Sync {
     }
 }
 
-/// No-op application stub for testing
+/// No-op application stub for testing.
 pub struct NoopApplication;
 
-impl Application for NoopApplication {
-    fn on_commit(&self, _block: &Block, _ctx: &BlockContext) -> Result<()> {
-        Ok(())
-    }
-}
+impl Application for NoopApplication {}

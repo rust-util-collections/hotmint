@@ -200,6 +200,15 @@ impl ConsensusEngine {
                         return Ok(());
                     }
                 } else if block.view < self.state.current_view {
+                    // Still store blocks from past views if we haven't committed
+                    // that height yet. This handles the case where fast-forward
+                    // advanced our view but we missed storing the block from the
+                    // earlier proposal. Without this, chain commits that walk
+                    // the parent chain would fail with "block not found".
+                    if block.height > self.state.last_committed_height {
+                        let mut store = self.store.write().unwrap();
+                        store.put_block(block);
+                    }
                     return Ok(());
                 }
 
@@ -511,14 +520,18 @@ impl ConsensusEngine {
         self.status_count = 0;
         self.current_view_qc = None;
 
-        // Epoch transition: apply pending validator set change before entering new view
-        if let Some(mut new_epoch) = self.pending_epoch.take() {
-            new_epoch.start_view = new_view;
+        // Epoch transition: apply pending validator set change when we reach the
+        // epoch's start_view. The start_view is set deterministically (commit_view + 2)
+        // so all honest nodes apply the transition at the same view.
+        if let Some(ref epoch) = self.pending_epoch
+            && new_view >= epoch.start_view
+        {
+            let new_epoch = self.pending_epoch.take().unwrap();
             info!(
                 validator = %self.state.validator_id,
                 old_epoch = %self.state.current_epoch.number,
                 new_epoch = %new_epoch.number,
-                start_view = %new_view,
+                start_view = %new_epoch.start_view,
                 validators = new_epoch.validator_set.validator_count(),
                 "epoch transition"
             );

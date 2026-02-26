@@ -50,7 +50,7 @@ tokio::spawn(async move { engine.run().await });
 
 ### Implement Application
 
-Only `on_commit` is required. Lifecycle: `begin_block` → `deliver_tx` (×N) → `end_block` → `on_commit`.
+All methods have default no-op implementations. Lifecycle: `execute_block(txs, ctx)` → `on_commit(block, ctx)`.
 
 ```rust
 use ruc::*;

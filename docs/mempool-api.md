@@ -46,10 +46,6 @@ impl Application for MyApp {
         // collect up to 1MB of transactions
         rt.block_on(self.mempool.collect_payload(1_048_576))
     }
-
-    fn on_commit(&self, _block: &Block, _ctx: &BlockContext) -> ruc::Result<()> {
-        Ok(())
-    }
 }
 ```
 
@@ -280,7 +276,7 @@ impl Application for TxCounterApp {
         rt.block_on(self.mempool.collect_payload(1_048_576))
     }
 
-    fn validate_tx(&self, tx: &[u8]) -> bool {
+    fn validate_tx(&self, tx: &[u8], _ctx: Option<&TxContext>) -> bool {
         !tx.is_empty() && tx.len() <= 4096
     }
 

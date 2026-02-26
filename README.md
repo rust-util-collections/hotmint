@@ -127,7 +127,7 @@ ruc = "9.3"
 
 ### Implement the Application Trait
 
-Only `on_commit` is required. The lifecycle is: `begin_block(ctx)` → `deliver_tx` (×N) → `end_block(ctx)` → `on_commit(block, ctx)`. All lifecycle methods receive a `BlockContext` with height, view, proposer, epoch number, and the current validator set.
+All methods have default no-op implementations, so you only need to implement the ones your application cares about. The lifecycle is: `execute_block(txs, ctx)` → `on_commit(block, ctx)`. The `execute_block` method receives all decoded transactions at once as `&[&[u8]]` plus a `BlockContext` with height, view, proposer, epoch number, and the current validator set, and returns an `EndBlockResponse`.
 
 ```rust
 use ruc::*;
@@ -144,7 +144,7 @@ impl Application for MyApp {
 }
 ```
 
-Override other methods as needed:
+All methods have default no-op implementations. Override the ones your application needs:
 
 ```rust
 impl Application for MyApp {
@@ -159,23 +159,17 @@ impl Application for MyApp {
         !block.payload.is_empty()
     }
 
-    fn validate_tx(&self, tx: &[u8]) -> bool {
+    fn validate_tx(&self, tx: &[u8], _ctx: Option<&TxContext>) -> bool {
         // validate an individual transaction (used by mempool)
         tx.len() <= 1024
     }
 
-    fn begin_block(&self, ctx: &BlockContext) -> Result<()> {
-        println!("begin block at height {}", ctx.height.as_u64());
-        Ok(())
-    }
-
-    fn deliver_tx(&self, tx: &[u8]) -> Result<()> {
-        println!("deliver tx: {} bytes", tx.len());
-        Ok(())
-    }
-
-    fn end_block(&self, ctx: &BlockContext) -> Result<EndBlockResponse> {
-        println!("end block at height {}", ctx.height.as_u64());
+    fn execute_block(&self, txs: &[&[u8]], ctx: &BlockContext) -> Result<EndBlockResponse> {
+        // called once per committed block with all transactions at once
+        println!("execute block at height {} with {} txs", ctx.height.as_u64(), txs.len());
+        for tx in txs {
+            println!("  tx: {} bytes", tx.len());
+        }
         Ok(EndBlockResponse::default())
     }
 

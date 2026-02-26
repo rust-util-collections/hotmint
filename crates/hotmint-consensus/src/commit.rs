@@ -4,7 +4,7 @@ use crate::application::Application;
 use crate::store::BlockStore;
 use hotmint_types::context::BlockContext;
 use hotmint_types::epoch::Epoch;
-use hotmint_types::{Block, BlockHash, DoubleCertificate, Height};
+use hotmint_types::{Block, BlockHash, DoubleCertificate, Height, ViewNumber};
 use tracing::info;
 
 /// Result of a commit operation
@@ -88,13 +88,10 @@ pub fn try_commit(
 
         info!(height = block.height.as_u64(), hash = %block.hash, "committing block");
 
-        app.begin_block(&ctx).c(d!("begin_block failed"))?;
-
-        for tx in decode_payload(&block.payload) {
-            app.deliver_tx(tx).c(d!("deliver_tx failed"))?;
-        }
-
-        let response = app.end_block(&ctx).c(d!("end_block failed"))?;
+        let txs = decode_payload(&block.payload);
+        let response = app
+            .execute_block(&txs, &ctx)
+            .c(d!("execute_block failed"))?;
 
         app.on_commit(block, &ctx)
             .c(d!("application commit failed"))?;
@@ -103,12 +100,11 @@ pub fn try_commit(
             let new_vs = current_epoch
                 .validator_set
                 .apply_updates(&response.validator_updates);
-            pending_epoch = Some(Epoch::new(
-                current_epoch.number.next(),
-                // Placeholder — engine sets the real start_view in advance_view_to
-                hotmint_types::ViewNumber::GENESIS,
-                new_vs,
-            ));
+            // The new epoch starts 2 views after the committing block's view.
+            // This deterministic gap gives lagging nodes time to catch up and
+            // ensures all honest nodes apply the epoch at the same view.
+            let epoch_start = ViewNumber(block.view.as_u64() + 2);
+            pending_epoch = Some(Epoch::new(current_epoch.number.next(), epoch_start, new_vs));
         }
 
         *last_committed_height = block.height;

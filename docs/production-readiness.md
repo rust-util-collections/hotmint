@@ -13,10 +13,10 @@
 | 核心共识协议 | ✅ 完整 | HotStuff-2 两链提交，正确实现 |
 | 加权投票 | ✅ 完整 | 按 power 加权，quorum = ceil(2*total_power/3) |
 | Proposer 信息 | ✅ 完整 | Block.proposer 可用于应用层奖励分配 |
-| 动态 ValidatorSet 更新 | ✅ 已实现 | `end_block` 返回 `EndBlockResponse` 含 `validator_updates`，引擎在 view 边界切换 |
+| 动态 ValidatorSet 更新 | ✅ 已实现 | `execute_block` 返回 `EndBlockResponse` 含 `validator_updates`，引擎在 view 边界切换 |
 | Epoch 切换 | ✅ 已实现 | `ConsensusState.current_epoch`，`PersistentConsensusState` 持久化 epoch，`advance_view_to` 执行切换 |
 | 双签检测 / 证据机制 | ✅ 已实现 | `VoteCollector` 检测双签并返回 `EquivocationProof`，`Application::on_evidence()` 回调 |
-| Application 返回 ValidatorSet | ✅ 已实现 | `end_block` 返回 `EndBlockResponse { validator_updates }` |
+| Application 返回 ValidatorSet | ✅ 已实现 | `execute_block` 返回 `EndBlockResponse { validator_updates, events }` |
 | Application 访问 ValidatorSet | ✅ 已实现 | `BlockContext` 提供 `&ValidatorSet` 和 `EpochNumber` |
 | 状态同步 / 区块同步 | ✅ 已实现 | Block sync via `/hotmint/sync/1` 协议，`sync_to_tip` + `replay_blocks` |
 | 动态 Peer 发现 | ✅ 已实现 | `PeerMap::remove()`，`NetCommand::AddPeer/RemovePeer`，运行时增删节点 |
@@ -28,11 +28,12 @@
 
 ### 现状：✅ 已实现
 
-采用 Tendermint 式 EndBlock 返回值方案。`Application::end_block()` 返回 `EndBlockResponse`：
+采用单次调用方案。`Application::execute_block()` 返回 `EndBlockResponse`：
 
 ```rust
 pub struct EndBlockResponse {
     pub validator_updates: Vec<ValidatorUpdate>,
+    pub events: Vec<Event>,
 }
 
 pub struct ValidatorUpdate {
@@ -40,11 +41,21 @@ pub struct ValidatorUpdate {
     pub public_key: PublicKey,
     pub power: u64,  // power=0 表示移除
 }
+
+pub struct Event {
+    pub r#type: String,
+    pub attributes: Vec<EventAttribute>,
+}
+
+pub struct EventAttribute {
+    pub key: String,
+    pub value: String,
+}
 ```
 
-共识引擎在 `try_commit` 中调用 `end_block`，检查返回值。若 `validator_updates` 非空，则调用 `ValidatorSet::apply_updates()` 构建新的 validator set，创建新 `Epoch`，并在 view 边界（`advance_view_to`）执行切换。
+共识引擎在 `try_commit` 中调用 `execute_block`，检查返回值。若 `validator_updates` 非空，则调用 `ValidatorSet::apply_updates()` 构建新的 validator set，创建新 `Epoch`，并在 view 边界（`advance_view_to`）执行切换。
 
-应用层可在 `deliver_tx()` 中处理 staking 交易（质押/退出），在 `end_block()` 中汇总变更并返回 `ValidatorUpdate` 列表。
+应用层可在 `execute_block()` 中处理 staking 交易（质押/退出），汇总变更并通过 `EndBlockResponse` 返回 `ValidatorUpdate` 列表。
 
 ---
 
@@ -55,7 +66,7 @@ pub struct ValidatorUpdate {
 Epoch 已完全集成到共识引擎：
 
 - `ConsensusState` 包含 `current_epoch: Epoch`，在 `ConsensusState::new()` 中初始化为 `Epoch::genesis(validator_set)`
-- Epoch 切换由应用层触发：`end_block` 返回非空 `validator_updates` 时，`try_commit` 构建新 `Epoch`（`pending_epoch`）
+- Epoch 切换由应用层触发：`execute_block` 返回非空 `validator_updates` 时，`try_commit` 构建新 `Epoch`（`pending_epoch`）
 - 新 epoch 在 view 边界生效（`advance_view_to` 中应用 `pending_epoch`，设置实际 `start_view`）
 - `PersistentConsensusState` 提供 `save_current_epoch()` / `load_current_epoch()` 用于崩溃恢复
 - `BlockContext` 向 Application 传递 `epoch: EpochNumber` 和 `validator_set: &ValidatorSet`
@@ -90,7 +101,7 @@ Application trait 提供 `on_evidence` 回调：
 fn on_evidence(&self, _proof: &EquivocationProof) -> Result<()> { Ok(()) }
 ```
 
-应用层可在 `on_evidence()` 中实现 slashing 逻辑，然后在 `end_block()` 中通过 `ValidatorUpdate { power: 0 }` 移除被惩罚的 validator。
+应用层可在 `on_evidence()` 中实现 slashing 逻辑，然后在 `execute_block()` 中通过 `EndBlockResponse` 返回 `ValidatorUpdate { power: 0 }` 移除被惩罚的 validator。
 
 ---
 
@@ -125,7 +136,7 @@ pub struct Block {
 
 ### 改进状态：✅ 已通过 BlockContext 解决
 
-`BlockContext` 包含 `proposer: ValidatorId`，所有 Application 生命周期方法（`begin_block`、`end_block`、`on_commit`）均可通过 `ctx.proposer` 访问提案者信息。应用层无需自行推算。
+`BlockContext` 包含 `proposer: ValidatorId`，所有 Application 生命周期方法（`execute_block`、`on_commit`）均可通过 `ctx.proposer` 访问提案者信息。应用层无需自行推算。
 
 ---
 
@@ -148,8 +159,7 @@ pub struct BlockContext<'a> {
 所有 Application 生命周期方法使用 `BlockContext`：
 
 ```rust
-fn begin_block(&self, ctx: &BlockContext) -> Result<()>;
-fn end_block(&self, ctx: &BlockContext) -> Result<EndBlockResponse>;
+fn execute_block(&self, txs: &[&[u8]], ctx: &BlockContext) -> Result<EndBlockResponse>;
 fn on_commit(&self, block: &Block, ctx: &BlockContext) -> Result<()>;
 fn create_payload(&self, ctx: &BlockContext) -> Vec<u8>;
 fn validate_block(&self, block: &Block, ctx: &BlockContext) -> bool;
@@ -227,7 +237,7 @@ fn validate_block(&self, block: &Block, ctx: &BlockContext) -> bool;
 ### Phase 1：动态 ValidatorSet 基础设施 ✅ 已完成
 
 1. ✅ `ConsensusState` 添加 `current_epoch: Epoch`
-2. ✅ `Application::end_block()` 返回 `EndBlockResponse`（含 `validator_updates`）
+2. ✅ `Application::execute_block()` 返回 `EndBlockResponse`（含 `validator_updates`）
 3. ✅ `ConsensusEngine` 实现 epoch 切换逻辑：`try_commit` 检测 validator updates → 构建新 Epoch → `advance_view_to` 切换 validator set
 4. ✅ `PersistentConsensusState` 持久化 epoch（`save_current_epoch` / `load_current_epoch`）
 
@@ -241,7 +251,7 @@ fn validate_block(&self, block: &Block, ctx: &BlockContext) -> bool;
 ### Phase 3：Application 上下文增强 ✅ 已完成
 
 1. ✅ 引入 `BlockContext` 结构体（height, view, proposer, epoch, validator_set）
-2. ✅ `begin_block`、`end_block`、`on_commit`、`create_payload`、`validate_block` 均使用 `BlockContext`
+2. ✅ `execute_block`、`on_commit`、`create_payload`、`validate_block` 均使用 `BlockContext`
 3. ✅ Application 通过 `ctx.validator_set` 获得 `&ValidatorSet` 只读访问
 
 ### Phase 4：状态同步 ✅ 已完成
@@ -271,7 +281,7 @@ fn validate_block(&self, block: &Block, ctx: &BlockContext) -> bool;
 - **vsdb 持久化存储**：区块存储 + 共识状态崩溃恢复
 - **litep2p P2P 网络**：广播 + 单播消息路由
 - **Mempool**：FIFO 去重 + 容量限制
-- **Application trait 完整生命周期**：begin_block → deliver_tx → end_block（含 validator updates） → on_commit，所有方法接收 BlockContext
+- **Application trait 完整生命周期**：execute_block(txs, ctx)（含 validator updates + events） → on_commit，所有方法接收 BlockContext，所有方法均有默认空实现
 - **动态 ValidatorSet + Epoch 切换**：应用层通过 EndBlockResponse 触发 validator set 变更，引擎在 view 边界执行 epoch 切换
 - **双签检测与证据机制**：VoteCollector 检测 equivocation 并通过 on_evidence 回调应用层
 - **Prometheus 指标采集**：blocks_committed, votes_sent, view_timeouts 等

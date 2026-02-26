@@ -34,7 +34,7 @@ cargo run --bin hotmint-node
 
 ## Minimal Integration
 
-The simplest way to use hotmint is to implement the `Application` trait and wire it into an in-memory cluster.
+The simplest way to use hotmint is to implement the `Application` trait and wire it into an in-memory cluster. All methods have default no-op implementations, so you only need to implement the ones your application cares about.
 
 ### Step 1: Define Your Application
 
@@ -123,7 +123,7 @@ That's it — the cluster is now running consensus. Blocks will be proposed, vot
 
 ## Next Steps
 
-- [Application](application.md) — full lifecycle: `begin_block`, `deliver_tx`, `end_block`, `query`
+- [Application](application.md) — full lifecycle: `execute_block`, `on_commit`, `query`
 - [Storage](storage.md) — swap in persistent vsdb storage for production
 - [Networking](networking.md) — replace channels with litep2p for multi-process deployments
 - [Mempool & API](mempool-api.md) — accept external transactions via JSON-RPC

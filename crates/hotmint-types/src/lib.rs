@@ -13,13 +13,13 @@ pub mod vote;
 
 pub use block::{Block, BlockHash, Height};
 pub use certificate::{DoubleCertificate, QuorumCertificate, TimeoutCertificate};
-pub use context::BlockContext;
+pub use context::{BlockContext, TxContext};
 pub use crypto::{AggregateSignature, PublicKey, Signature, Signer, Verifier};
 pub use epoch::{Epoch, EpochNumber};
 pub use evidence::EquivocationProof;
 pub use message::ConsensusMessage;
 pub use sync::{SyncRequest, SyncResponse};
 pub use validator::{ValidatorId, ValidatorInfo, ValidatorSet};
-pub use validator_update::{EndBlockResponse, ValidatorUpdate};
+pub use validator_update::{EndBlockResponse, Event, EventAttribute, ValidatorUpdate};
 pub use view::ViewNumber;
 pub use vote::{Vote, VoteType};

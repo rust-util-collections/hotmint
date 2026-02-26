@@ -6,21 +6,17 @@ The `Application` trait is hotmint's equivalent of Tendermint's ABCI (Applicatio
 
 ```rust
 pub trait Application: Send + Sync {
-    fn create_payload(&self, _ctx: &BlockContext) -> Vec<u8>          { vec![] }
+    fn create_payload(&self, _ctx: &BlockContext) -> Vec<u8>            { vec![] }
     fn validate_block(&self, _block: &Block, _ctx: &BlockContext) -> bool { true }
-    fn validate_tx(&self, _tx: &[u8]) -> bool                        { true }
-    fn begin_block(&self, _ctx: &BlockContext) -> Result<()>          { Ok(()) }
-    fn deliver_tx(&self, _tx: &[u8]) -> Result<()>                   { Ok(()) }
-    fn end_block(&self, _ctx: &BlockContext) -> Result<EndBlockResponse> { Ok(EndBlockResponse::default()) }
-    fn on_evidence(&self, _proof: &EquivocationProof) -> Result<()>  { Ok(()) }
-    fn query(&self, _path: &str, _data: &[u8]) -> Result<Vec<u8>>   { Ok(vec![]) }
-
-    // The only required method
-    fn on_commit(&self, block: &Block, ctx: &BlockContext) -> Result<()>;
+    fn validate_tx(&self, _tx: &[u8], _ctx: Option<&TxContext>) -> bool { true }
+    fn execute_block(&self, _txs: &[&[u8]], _ctx: &BlockContext) -> Result<EndBlockResponse> { Ok(EndBlockResponse::default()) }
+    fn on_commit(&self, _block: &Block, _ctx: &BlockContext) -> Result<()> { Ok(()) }
+    fn on_evidence(&self, _proof: &EquivocationProof) -> Result<()>    { Ok(()) }
+    fn query(&self, _path: &str, _data: &[u8]) -> Result<Vec<u8>>     { Ok(vec![]) }
 }
 ```
 
-All methods except `on_commit` have default implementations, so you can incrementally adopt functionality.
+All methods have default no-op implementations, so you only need to implement the ones your application cares about.
 
 ### BlockContext
 
@@ -38,32 +34,38 @@ pub struct BlockContext<'a> {
 
 This gives the application access to the current epoch number and the active validator set without maintaining separate state.
 
+### TxContext
+
+`validate_tx` receives an optional `TxContext` providing lightweight context for mempool validation:
+
+```rust
+pub struct TxContext {
+    pub height: Height,
+    pub epoch: EpochNumber,
+}
+```
+
+When called from the mempool (pre-consensus), `ctx` is `Some` with the current chain tip info. During block re-validation it may be `None`.
+
 ## Lifecycle
 
 When a block is committed, the consensus engine invokes the application methods in this order:
 
 ```
-begin_block(ctx)
-    │
-    ├── deliver_tx(tx_1)
-    ├── deliver_tx(tx_2)
-    ├── ...
-    └── deliver_tx(tx_n)
-    │
-end_block(ctx)  →  EndBlockResponse { validator_updates }
+execute_block(txs, ctx)  →  EndBlockResponse { validator_updates, events }
     │
 on_commit(block, ctx)
 ```
 
-The payload in the committed block is decoded into individual transactions (using `Mempool::decode_payload`), and each is delivered via `deliver_tx`.
+The payload in the committed block is decoded into individual transactions (using `Mempool::decode_payload`), and all transactions are passed at once to `execute_block` as `&[&[u8]]` along with the current `BlockContext`. This single-call design replaces the old three-step `begin_block` / `deliver_tx` / `end_block` lifecycle, enabling more efficient implementations (batch DB writes, parallel signature verification, etc.).
 
-If `end_block` returns an `EndBlockResponse` with non-empty `validator_updates`, an epoch transition is scheduled. The new validator set takes effect at the next view boundary.
+If `execute_block` returns an `EndBlockResponse` with non-empty `validator_updates`, an epoch transition is scheduled. The new validator set takes effect at the next view boundary.
 
 ## Method Reference
 
-### `on_commit(block: &Block, ctx: &BlockContext) -> Result<()>` (required)
+### `on_commit(block: &Block, ctx: &BlockContext) -> Result<()>`
 
-Called after a block is finalized and all transactions have been delivered. This is where you apply the block to your application state (update databases, emit events, etc.). The `ctx` provides the current epoch and validator set.
+Called after a block is finalized and `execute_block` has completed. Has a default no-op implementation. Override this to perform post-commit actions (emit events, update caches, etc.). The `ctx` provides the current epoch and validator set.
 
 ```rust
 fn on_commit(&self, block: &Block, ctx: &BlockContext) -> Result<()> {
@@ -102,51 +104,36 @@ fn validate_block(&self, block: &Block, _ctx: &BlockContext) -> bool {
     }
     // verify all transactions in the payload
     let txs = hotmint::mempool::Mempool::decode_payload(&block.payload);
-    txs.iter().all(|tx| self.validate_tx(tx))
+    txs.iter().all(|tx| self.validate_tx(tx, None))
 }
 ```
 
-### `validate_tx(tx: &[u8]) -> bool`
+### `validate_tx(tx: &[u8], ctx: Option<&TxContext>) -> bool`
 
-Validate an individual transaction. Used by the mempool to filter incoming transactions before they enter the pool.
+Validate an individual transaction. Used by the mempool to filter incoming transactions before they enter the pool. The optional `TxContext` provides the current height and epoch when available (e.g., during mempool admission); it may be `None` during block re-validation.
 
 ```rust
-fn validate_tx(&self, tx: &[u8]) -> bool {
+fn validate_tx(&self, tx: &[u8], ctx: Option<&TxContext>) -> bool {
     // must be valid protobuf
     MyTransaction::decode(tx).is_ok()
 }
 ```
 
-### `begin_block(ctx: &BlockContext) -> Result<()>`
+### `execute_block(txs: &[&[u8]], ctx: &BlockContext) -> Result<EndBlockResponse>`
 
-Called at the start of block execution, before any `deliver_tx` calls. Use this to prepare per-block state.
+Called once per committed block with all decoded transactions at once. This is the primary method for applying block state transitions. The `ctx` provides the block's height, view, proposer, epoch, and validator set. Return an `EndBlockResponse` to optionally trigger an epoch transition with validator set updates.
 
-```rust
-fn begin_block(&self, ctx: &BlockContext) -> Result<()> {
-    self.state.lock().begin_tx_batch(ctx.height.as_u64());
-    Ok(())
-}
-```
-
-### `deliver_tx(tx: &[u8]) -> Result<()>`
-
-Called once per transaction in the committed block's payload. Apply the transaction to your application state.
+Receiving all transactions in a single call enables efficient patterns such as batch DB writes, parallel signature verification, or pre-sorted execution.
 
 ```rust
-fn deliver_tx(&self, tx: &[u8]) -> Result<()> {
-    let tx = MyTransaction::decode(tx).map_err(|e| eg!("decode: {e}"))?;
-    self.state.lock().execute(tx)?;
-    Ok(())
-}
-```
-
-### `end_block(ctx: &BlockContext) -> Result<EndBlockResponse>`
-
-Called after all transactions have been delivered, before `on_commit`. Use this for per-block finalization (e.g., committing a database transaction batch). Return an `EndBlockResponse` to optionally trigger an epoch transition with validator set updates.
-
-```rust
-fn end_block(&self, ctx: &BlockContext) -> Result<EndBlockResponse> {
-    self.state.lock().commit_tx_batch(ctx.height.as_u64());
+fn execute_block(&self, txs: &[&[u8]], ctx: &BlockContext) -> Result<EndBlockResponse> {
+    let mut state = self.state.lock();
+    state.begin_tx_batch(ctx.height.as_u64());
+    for tx_bytes in txs {
+        let tx = MyTransaction::decode(tx_bytes).map_err(|e| eg!("decode: {e}"))?;
+        state.execute(tx)?;
+    }
+    state.commit_tx_batch(ctx.height.as_u64());
     Ok(EndBlockResponse::default()) // no validator changes
 }
 ```
@@ -206,11 +193,12 @@ Both signatures are retained so that any third party can independently verify th
 
 ## EndBlockResponse and Epoch Transitions
 
-`end_block` returns an `EndBlockResponse` that can trigger dynamic validator set changes:
+`execute_block` returns an `EndBlockResponse` that can trigger dynamic validator set changes:
 
 ```rust
 pub struct EndBlockResponse {
     pub validator_updates: Vec<ValidatorUpdate>,
+    pub events: Vec<Event>,
 }
 
 pub struct ValidatorUpdate {
@@ -218,9 +206,19 @@ pub struct ValidatorUpdate {
     pub public_key: PublicKey,
     pub power: u64, // power = 0 means remove the validator
 }
+
+pub struct Event {
+    pub r#type: String,
+    pub attributes: Vec<EventAttribute>,
+}
+
+pub struct EventAttribute {
+    pub key: String,
+    pub value: String,
+}
 ```
 
-When `validator_updates` is non-empty, the consensus engine schedules an **epoch transition**:
+When `validator_updates` is non-empty, the consensus engine schedules an **epoch transition**. The `events` field allows the application to emit structured events that external consumers (indexers, UIs) can observe.
 
 1. The engine applies the updates to the current `ValidatorSet` to produce a new set.
 2. A new `Epoch` is constructed with an incremented `EpochNumber` and the updated validator set.
@@ -230,7 +228,13 @@ When `validator_updates` is non-empty, the consensus engine schedules an **epoch
 Example: removing a slashed validator at a specific block height:
 
 ```rust
-fn end_block(&self, ctx: &BlockContext) -> Result<EndBlockResponse> {
+fn execute_block(&self, txs: &[&[u8]], ctx: &BlockContext) -> Result<EndBlockResponse> {
+    // process transactions
+    for tx in txs {
+        self.apply_tx(tx, ctx)?;
+    }
+
+    // check for slashed validators
     let slashed = self.slashing_state.lock().drain_slashed();
     if slashed.is_empty() {
         return Ok(EndBlockResponse::default());
@@ -246,7 +250,7 @@ fn end_block(&self, ctx: &BlockContext) -> Result<EndBlockResponse> {
             }
         })
         .collect();
-    Ok(EndBlockResponse { validator_updates: updates })
+    Ok(EndBlockResponse { validator_updates: updates, ..Default::default() })
 }
 ```
 
@@ -272,7 +276,7 @@ impl KvStoreApp {
 }
 
 impl Application for KvStoreApp {
-    fn validate_tx(&self, tx: &[u8]) -> bool {
+    fn validate_tx(&self, tx: &[u8], _ctx: Option<&TxContext>) -> bool {
         // expect "key=value" format
         let s = String::from_utf8_lossy(tx);
         s.contains('=') && s.split('=').count() == 2
@@ -280,16 +284,19 @@ impl Application for KvStoreApp {
 
     fn validate_block(&self, block: &Block, _ctx: &BlockContext) -> bool {
         let txs = hotmint::mempool::Mempool::decode_payload(&block.payload);
-        txs.iter().all(|tx| self.validate_tx(tx))
+        txs.iter().all(|tx| self.validate_tx(tx, None))
     }
 
-    fn deliver_tx(&self, tx: &[u8]) -> Result<()> {
-        let s = String::from_utf8_lossy(tx);
-        let mut parts = s.splitn(2, '=');
-        let key = parts.next().ok_or_else(|| eg!("missing key"))?.to_string();
-        let val = parts.next().ok_or_else(|| eg!("missing value"))?.to_string();
-        self.store.lock().unwrap().insert(key, val);
-        Ok(())
+    fn execute_block(&self, txs: &[&[u8]], _ctx: &BlockContext) -> Result<EndBlockResponse> {
+        let mut store = self.store.lock().unwrap();
+        for tx in txs {
+            let s = String::from_utf8_lossy(tx);
+            let mut parts = s.splitn(2, '=');
+            let key = parts.next().ok_or_else(|| eg!("missing key"))?.to_string();
+            let val = parts.next().ok_or_else(|| eg!("missing value"))?.to_string();
+            store.insert(key, val);
+        }
+        Ok(EndBlockResponse::default())
     }
 
     fn on_commit(&self, block: &Block, _ctx: &BlockContext) -> Result<()> {
@@ -321,16 +328,12 @@ impl Application for KvStoreApp {
 
 ## NoopApplication
 
-For testing or when you don't need application logic. `NoopApplication` implements the required `on_commit` as a no-op:
+For testing or when you don't need application logic. Since all `Application` methods now have default no-op implementations, `NoopApplication` requires no method overrides:
 
 ```rust
 pub struct NoopApplication;
 
-impl Application for NoopApplication {
-    fn on_commit(&self, _block: &Block, _ctx: &BlockContext) -> Result<()> {
-        Ok(())
-    }
-}
+impl Application for NoopApplication {}
 ```
 
 Usage:

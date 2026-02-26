@@ -11,3 +11,10 @@ pub struct BlockContext<'a> {
     pub epoch: EpochNumber,
     pub validator_set: &'a ValidatorSet,
 }
+
+/// Lightweight context for transaction validation (mempool admission).
+/// Unlike [`BlockContext`], this does not require a specific block.
+pub struct TxContext {
+    pub height: Height,
+    pub epoch: EpochNumber,
+}

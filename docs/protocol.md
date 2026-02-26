@@ -87,7 +87,7 @@ This ensures that a replica never votes for a proposal that conflicts with a blo
 A double certificate `C_v(C_v(B_k))` triggers commit. When committed:
 
 1. Block `B_k` and all uncommitted ancestors are committed in ascending height order.
-2. For each committed block, the application lifecycle is invoked: `begin_block` → `deliver_tx` (×N) → `end_block` → `on_commit`.
+2. For each committed block, the application lifecycle is invoked: `execute_block(txs, ctx)` → `on_commit(block, ctx)`.
 3. The `last_committed_height` is advanced accordingly.
 
 ## View Change / Pacemaker

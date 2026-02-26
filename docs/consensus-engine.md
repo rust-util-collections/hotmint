@@ -199,9 +199,8 @@ When a double certificate is formed:
 1. Identify the committed block from the double certificate
 2. Walk the chain from the committed block backward to `last_committed_height + 1`
 3. For each block in ascending height order:
-   - `app.begin_block(ctx)` (where `ctx` is a `BlockContext` with height, view, proposer, epoch, validator_set)
-   - Decode payload and call `app.deliver_tx(tx)` for each transaction
-   - `app.end_block(ctx)` (returns `EndBlockResponse` which may contain validator updates)
+   - Decode payload into transactions
+   - `app.execute_block(txs, ctx)` (where `txs` is `&[&[u8]]` and `ctx` is a `BlockContext` with height, view, proposer, epoch, validator_set; returns `EndBlockResponse` which may contain validator updates and events)
    - `app.on_commit(block, ctx)`
 4. Update `last_committed_height`
 

@@ -66,12 +66,6 @@ impl Application for MyApp {
         let rt = tokio::runtime::Handle::current();
         rt.block_on(self.mempool.collect_payload(1_048_576))
     }
-
-    fn on_commit(&self, block: &hotmint_types::Block, _ctx: &hotmint_types::context::BlockContext) -> ruc::Result<()> {
-        let txs = Mempool::decode_payload(&block.payload);
-        println!("committed {} txs", txs.len());
-        Ok(())
-    }
 }
 ```
 
