@@ -13,14 +13,14 @@ pub struct ValidatorUpdate {
 }
 
 /// An application-defined event emitted during block execution.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Event {
     pub r#type: String,
     pub attributes: Vec<EventAttribute>,
 }
 
 /// A key-value pair within an [`Event`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventAttribute {
     pub key: String,
     pub value: String,
@@ -28,7 +28,7 @@ pub struct EventAttribute {
 
 /// Response from `Application::end_block()`.
 /// If `validator_updates` is non-empty, an epoch transition is scheduled.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EndBlockResponse {
     pub validator_updates: Vec<ValidatorUpdate>,
     /// Application-defined events emitted during this block.

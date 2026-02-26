@@ -1,0 +1,20 @@
+[package]
+name = "hotmint-abci"
+description = "IPC proxy layer (Application Binary Consensus Interface) for Hotmint"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+
+[dependencies]
+hotmint-types = { workspace = true }
+hotmint-consensus = { workspace = true }
+serde = { workspace = true }
+serde_cbor_2 = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+ruc = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

@@ -9,10 +9,11 @@ members = [
     "crates/hotmint-network",
     "crates/hotmint-mempool",
     "crates/hotmint-api",
+    "crates/hotmint-abci",
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "GPL-3.0-only"
 repository = "https://github.com/rust-util-collections/hotmint"
@@ -36,10 +37,11 @@ prometheus-client = "0.23"
 serde_json = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
 
-hotmint-types = { version = "0.2.0", path = "crates/hotmint-types" }
-hotmint-crypto = { version = "0.2.0", path = "crates/hotmint-crypto" }
-hotmint-consensus = { version = "0.2.0", path = "crates/hotmint-consensus" }
-hotmint-storage = { version = "0.2.0", path = "crates/hotmint-storage" }
-hotmint-network = { version = "0.2.0", path = "crates/hotmint-network" }
-hotmint-mempool = { version = "0.2.0", path = "crates/hotmint-mempool" }
-hotmint-api = { version = "0.2.0", path = "crates/hotmint-api" }
+hotmint-types = { version = "0.3.0", path = "crates/hotmint-types" }
+hotmint-crypto = { version = "0.3.0", path = "crates/hotmint-crypto" }
+hotmint-consensus = { version = "0.3.0", path = "crates/hotmint-consensus" }
+hotmint-storage = { version = "0.3.0", path = "crates/hotmint-storage" }
+hotmint-network = { version = "0.3.0", path = "crates/hotmint-network" }
+hotmint-mempool = { version = "0.3.0", path = "crates/hotmint-mempool" }
+hotmint-api = { version = "0.3.0", path = "crates/hotmint-api" }
+hotmint-abci = { version = "0.3.0", path = "crates/hotmint-abci" }

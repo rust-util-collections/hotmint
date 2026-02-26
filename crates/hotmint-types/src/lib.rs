@@ -13,7 +13,7 @@ pub mod vote;
 
 pub use block::{Block, BlockHash, Height};
 pub use certificate::{DoubleCertificate, QuorumCertificate, TimeoutCertificate};
-pub use context::{BlockContext, TxContext};
+pub use context::{BlockContext, OwnedBlockContext, TxContext};
 pub use crypto::{AggregateSignature, PublicKey, Signature, Signer, Verifier};
 pub use epoch::{Epoch, EpochNumber};
 pub use evidence::EquivocationProof;

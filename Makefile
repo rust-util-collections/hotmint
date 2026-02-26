@@ -6,6 +6,7 @@ CRATES := \
 	hotmint-mempool \
 	hotmint-crypto \
 	hotmint-consensus \
+	hotmint-abci \
 	hotmint-network \
 	hotmint-storage \
 	hotmint-api \
