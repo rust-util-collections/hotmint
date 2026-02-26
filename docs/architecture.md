@@ -14,6 +14,7 @@ hotmint/
 │   ├── hotmint-storage/           # persistent storage (vsdb)
 │   ├── hotmint-network/           # P2P networking (litep2p)
 │   ├── hotmint-mempool/           # transaction mempool
+│   ├── hotmint-abci/              # IPC proxy for out-of-process apps
 │   ├── hotmint-api/               # JSON-RPC API
 │   └── hotmint/                   # top-level library facade
 └── docs/
@@ -27,6 +28,7 @@ hotmint (library facade — re-exports everything)
   ├── hotmint-crypto    ──> hotmint-types
   ├── hotmint-storage   ──> hotmint-consensus, vsdb
   ├── hotmint-network   ──> hotmint-consensus, litep2p
+  ├── hotmint-abci      ──> hotmint-consensus, hotmint-types
   ├── hotmint-mempool   (standalone)
   └── hotmint-api       ──> hotmint-mempool
 ```
@@ -75,7 +77,17 @@ Also defines the pluggable trait interfaces:
 - `NetworkSink` — message transport
 - `Application` — ABCI-like application lifecycle
 
-Each trait includes an in-memory/no-op stub implementation for development use.
+Each trait includes an in-memory/no-op stub implementation for development use. The `hotmint-abci` crate provides `IpcApplicationClient`, which implements `Application` by forwarding calls over a Unix domain socket to an out-of-process application.
+
+### hotmint-abci
+
+IPC proxy layer (Application Binary Consensus Interface) for running applications as separate processes:
+
+- `IpcApplicationClient` — implements `Application` by forwarding calls over a Unix domain socket using length-prefixed CBOR frames
+- `IpcApplicationServer` + `ApplicationHandler` — listens on a Unix socket, dispatches requests to user-provided handler
+- `OwnedBlockContext` — owned version of `BlockContext` for cross-process serialization
+
+This enables applications written in any language to participate in consensus, communicating via a simple length-prefixed CBOR protocol over Unix stream sockets.
 
 ### hotmint-storage
 

@@ -14,6 +14,7 @@
 //! - [`storage`] — Persistent block/state storage (vsdb)
 //! - [`network`] — P2P networking via litep2p
 //! - [`mempool`] — Transaction buffering and deduplication
+//! - [`abci`] — IPC proxy for out-of-process applications (Unix socket)
 //! - [`api`] — JSON-RPC API for external interaction
 //!
 //! # Quick Start
@@ -52,6 +53,10 @@ pub use hotmint_network as network;
 
 /// Transaction mempool with FIFO ordering and deduplication.
 pub use hotmint_mempool as mempool;
+
+/// IPC proxy layer for running applications as separate processes
+/// (Unix domain socket, length-prefixed CBOR).
+pub use hotmint_abci as abci;
 
 /// JSON-RPC API for external interaction (status, transaction submission).
 pub use hotmint_api as api;

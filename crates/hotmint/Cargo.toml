@@ -26,6 +26,7 @@ hotmint-consensus = { workspace = true }
 hotmint-storage = { workspace = true }
 hotmint-network = { workspace = true }
 hotmint-mempool = { workspace = true }
+hotmint-abci = { workspace = true }
 hotmint-api = { workspace = true }
 
 tokio = { workspace = true }

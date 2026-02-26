@@ -17,6 +17,7 @@ This is the top-level facade crate that re-exports the entire Hotmint ecosystem.
 | `hotmint::storage` | [hotmint-storage](https://crates.io/crates/hotmint-storage) | Persistent storage (vsdb) |
 | `hotmint::network` | [hotmint-network](https://crates.io/crates/hotmint-network) | P2P networking (litep2p) |
 | `hotmint::mempool` | [hotmint-mempool](https://crates.io/crates/hotmint-mempool) | Transaction mempool |
+| `hotmint::abci` | [hotmint-abci](https://crates.io/crates/hotmint-abci) | IPC proxy (Unix socket) |
 | `hotmint::api` | [hotmint-api](https://crates.io/crates/hotmint-api) | JSON-RPC API |
 
 ## Prelude

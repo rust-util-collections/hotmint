@@ -48,6 +48,7 @@ hotmint (library facade — re-exports everything)
   ├── hotmint-types      core data types (Block, QC, Vote, ValidatorSet, ...)
   ├── hotmint-crypto     Ed25519 signing + Blake3 hashing
   ├── hotmint-consensus  consensus state machine (engine, pacemaker, vote collector)
+  ├── hotmint-abci       IPC proxy for out-of-process applications (Unix socket)
   ├── hotmint-storage    persistent storage (vsdb)
   ├── hotmint-network    P2P networking (litep2p)
   ├── hotmint-mempool    transaction mempool (FIFO, dedup)
@@ -58,7 +59,7 @@ The consensus engine is decoupled from all I/O through four pluggable traits:
 
 | Trait | Purpose | Built-in Implementations |
 |:------|:--------|:-------------------------|
-| `Application` | ABCI-like app lifecycle | `NoopApplication` |
+| `Application` | ABCI-like app lifecycle | `NoopApplication`, `IpcApplicationClient` |
 | `BlockStore` | Block persistence | `MemoryBlockStore`, `VsdbBlockStore` |
 | `NetworkSink` | Message transport | `ChannelNetwork`, `Litep2pNetworkSink` |
 | `Signer` | Cryptographic signing | `Ed25519Signer` |
