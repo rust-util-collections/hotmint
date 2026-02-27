@@ -179,12 +179,16 @@ async fn run_node(
             Some(litep2p_keypair),
         )?;
 
-    // 8. Create ABCI application client
+    // 8. Create ABCI application client and verify connectivity
     let proxy_path = config
         .proxy_app
         .strip_prefix("unix://")
         .unwrap_or(&config.proxy_app);
     let ipc_client = IpcApplicationClient::new(proxy_path);
+    ipc_client.check_connection().c(d!(
+        "ABCI application not reachable at '{}' — start your application first",
+        proxy_path
+    ))?;
 
     // 9. Wrap with status channel for RPC
     let (status_tx, status_rx) = watch::channel((

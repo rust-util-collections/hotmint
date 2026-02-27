@@ -79,24 +79,25 @@ Corresponds to `C_v(B_k)` — an aggregate signature from 2f+1 validators on a b
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DoubleCertificate {
-    pub qc: QuorumCertificate,
-    pub aggregate_signature: AggregateSignature,
+    pub inner_qc: QuorumCertificate,
+    pub outer_qc: QuorumCertificate,
 }
 ```
 
-Corresponds to `C_v(C_v(B_k))` — a QC of a QC. Triggers the commit of the referenced block and all uncommitted ancestors.
+Corresponds to `C_v(C_v(B_k))` — a QC of a QC. The `inner_qc` is the original QC on the block, and the `outer_qc` is the QC formed from phase-2 votes on that QC. Triggers the commit of the referenced block and all uncommitted ancestors.
 
 ### TimeoutCertificate (TC)
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimeoutCertificate {
-    pub target_view: ViewNumber,
-    pub wishes: Vec<(ValidatorId, Option<QuorumCertificate>, Signature)>,
+    pub view: ViewNumber,
+    pub aggregate_signature: AggregateSignature,
+    pub highest_qcs: Vec<Option<QuorumCertificate>>,
 }
 ```
 
-Corresponds to `TC_v` — proof that 2f+1 validators timed out and wish to advance to `target_view`. Each wish carries the validator's `highest_qc` to help the next leader pick the best chain to extend.
+Corresponds to `TC_v` — proof that 2f+1 validators timed out in `view`. Contains an aggregate signature over the timeout messages and each signer's `highest_qc` (indexed by validator position in the set) to help the next leader pick the best chain to extend.
 
 ## Vote
 

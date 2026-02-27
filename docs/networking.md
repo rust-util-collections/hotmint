@@ -104,18 +104,24 @@ let known_addresses = vec![
     (peer_id_3, vec!["/ip4/10.0.0.4/tcp/30000".parse().unwrap()]),
 ];
 
-let (net_service, network_sink, msg_rx) = NetworkService::create(
-    listen_addr,
-    peer_map,
-    known_addresses,
-    None,
-).unwrap();
+let (net_service, network_sink, msg_rx, sync_req_rx, sync_resp_rx, peer_info_rx) =
+    NetworkService::create(
+        listen_addr,
+        peer_map,
+        known_addresses,
+        None, // Optional<litep2p::crypto::ed25519::Keypair>
+    ).unwrap();
 ```
 
-`NetworkService::create` returns three items:
+`NetworkService::create` accepts an optional `keypair` parameter (`Option<litep2p::crypto::ed25519::Keypair>`). When `None`, a random keypair is generated.
+
+It returns six items:
 1. `net_service: NetworkService` — the service itself, must be `.run()` on a tokio task
 2. `network_sink: Litep2pNetworkSink` — implements `NetworkSink`, pass to `ConsensusEngine`
-3. `msg_rx: UnboundedReceiver<(ValidatorId, ConsensusMessage)>` — incoming messages, pass to `ConsensusEngine`
+3. `msg_rx: UnboundedReceiver<(ValidatorId, ConsensusMessage)>` — incoming consensus messages, pass to `ConsensusEngine`
+4. `sync_req_rx: UnboundedReceiver<IncomingSyncRequest>` — incoming sync requests from peers
+5. `sync_resp_rx: UnboundedReceiver<SyncResponse>` — incoming sync responses from peers
+6. `peer_info_rx: watch::Receiver<Vec<PeerStatus>>` — live peer connection status updates
 
 ### Running
 
@@ -195,7 +201,7 @@ async fn run_validator(
     }
 
     // P2P networking
-    let (net_service, network_sink, msg_rx) =
+    let (net_service, network_sink, msg_rx, sync_req_rx, sync_resp_rx, peer_info_rx) =
         NetworkService::create(listen_addr, peer_map, known_addresses, None).unwrap();
     tokio::spawn(async move { net_service.run().await });
 

@@ -28,6 +28,14 @@ impl IpcApplicationClient {
         }
     }
 
+    /// Try to connect to the ABCI socket. Returns an error if unreachable.
+    pub fn check_connection(&self) -> Result<()> {
+        let stream = UnixStream::connect(&self.socket_path).c(d!("connect to ABCI socket"))?;
+        let mut guard = self.conn.lock().map_err(|e| eg!(e.to_string()))?;
+        *guard = Some(stream);
+        Ok(())
+    }
+
     /// Send a request and wait for the response, lazily connecting on first use.
     fn call(&self, req: &Request) -> Result<Response> {
         let payload = serde_cbor_2::to_vec(req).c(d!("serialize request"))?;
