@@ -203,7 +203,7 @@ Submit a transaction (hex-encoded bytes).
 
 Request:
 ```bash
-echo '{"method":"submit_tx","params":{"tx":"48656c6c6f"},"id":2}' | nc 127.0.0.1 26657
+echo '{"method":"submit_tx","params":"48656c6c6f","id":2}' | nc 127.0.0.1 26657
 ```
 
 Response:

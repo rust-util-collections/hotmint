@@ -10,3 +10,4 @@ keywords.workspace = true
 [dependencies]
 tracing = { workspace = true }
 tokio = { workspace = true }
+blake3 = { workspace = true }

@@ -43,6 +43,7 @@ let (net_service, network_sink, msg_rx) = NetworkService::create(
     "/ip4/0.0.0.0/tcp/30000".parse().unwrap(),
     peer_map,
     known_addresses,
+    None,
 ).unwrap();
 
 // run the network event loop
@@ -59,6 +60,7 @@ let engine = ConsensusEngine::new(
     Box::new(app),
     Box::new(signer),
     msg_rx,
+    None,
 );
 ```
 

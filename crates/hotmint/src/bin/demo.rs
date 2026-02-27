@@ -37,6 +37,17 @@ impl Application for CountingApp {
 
 #[tokio::main]
 async fn main() {
+    if std::env::args().any(|a| a == "--help" || a == "-h") {
+        println!("hotmint-demo: 4-node in-process consensus demo");
+        println!("Usage: hotmint-demo");
+        println!();
+        println!(
+            "Runs {} validators connected via in-memory channels for 30 seconds.",
+            NUM_VALIDATORS
+        );
+        return;
+    }
+
     tracing_subscriber::fmt()
         .with_max_level(Level::INFO)
         .with_target(false)

@@ -352,5 +352,6 @@ let engine = ConsensusEngine::new(
     Box::new(NoopApplication),
     Box::new(signer),
     msg_rx,
+    None,
 );
 ```

@@ -43,6 +43,7 @@ let engine = ConsensusEngine::new(
     Box::new(NoopApplication),
     Box::new(signer),
     msg_rx,
+    None,
 );
 
 tokio::spawn(async move { engine.run().await });

@@ -108,6 +108,7 @@ let (net_service, network_sink, msg_rx) = NetworkService::create(
     listen_addr,
     peer_map,
     known_addresses,
+    None,
 ).unwrap();
 ```
 
@@ -134,6 +135,7 @@ let engine = ConsensusEngine::new(
     Box::new(app),
     Box::new(signer),
     msg_rx,
+    None,
 );
 tokio::spawn(async move { engine.run().await });
 ```
@@ -194,7 +196,7 @@ async fn run_validator(
 
     // P2P networking
     let (net_service, network_sink, msg_rx) =
-        NetworkService::create(listen_addr, peer_map, known_addresses).unwrap();
+        NetworkService::create(listen_addr, peer_map, known_addresses, None).unwrap();
     tokio::spawn(async move { net_service.run().await });
 
     // consensus engine
@@ -207,6 +209,7 @@ async fn run_validator(
         Box::new(app),
         Box::new(signer),
         msg_rx,
+        None,
     );
     engine.run().await;
 }

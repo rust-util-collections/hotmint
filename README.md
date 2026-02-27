@@ -93,7 +93,11 @@ The consensus engine is decoupled from all I/O through four pluggable traits:
 cargo build --workspace && cargo test --workspace
 
 # run the 4-node in-process demo
-cargo run --bin hotmint-node
+cargo run --bin hotmint-demo
+
+# or initialize and run a production node
+cargo run --bin hotmint-node -- init
+cargo run --bin hotmint-node -- node
 ```
 
 📖 **[Getting started guide →](docs/getting-started.md)**
@@ -256,6 +260,7 @@ for i in 0..NUM_VALIDATORS {
         Box::new(MyApp),
         Box::new(signers[i as usize].clone()),
         rx,
+        None,
     );
 
     tokio::spawn(async move { engine.run().await });
@@ -306,6 +311,7 @@ let engine = ConsensusEngine::new(
     Box::new(MyApp),
     Box::new(signer),
     msg_rx,
+    None,
 );
 ```
 
@@ -334,6 +340,7 @@ let (net_service, network_sink, msg_rx) = NetworkService::create(
     "/ip4/0.0.0.0/tcp/30000".parse().unwrap(),
     peer_map,
     known_addresses,
+    None,
 ).unwrap();
 
 // run the network event loop in background
@@ -388,7 +395,7 @@ Submit transactions via JSON-RPC (newline-delimited JSON over TCP):
 echo '{"method":"status","params":{},"id":1}' | nc 127.0.0.1 26657
 
 # submit a transaction (hex-encoded)
-echo '{"method":"submit_tx","params":{"tx":"deadbeef"},"id":2}' | nc 127.0.0.1 26657
+echo '{"method":"submit_tx","params":"deadbeef","id":2}' | nc 127.0.0.1 26657
 ```
 
 📖 **[Mempool & API guide →](docs/mempool-api.md)**

@@ -37,6 +37,7 @@ let engine = ConsensusEngine::new(
     Box::new(application),    // impl Application
     Box::new(signer),         // impl Signer
     msg_rx,                   // UnboundedReceiver<(ValidatorId, ConsensusMessage)>
+    None,                     // Optional<PacemakerConfig>
 );
 ```
 

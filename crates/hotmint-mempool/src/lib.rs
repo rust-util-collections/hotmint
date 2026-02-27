@@ -49,10 +49,11 @@ impl Mempool {
     }
 
     /// Collect transactions for a block proposal (up to max_bytes total).
-    /// Collected transactions are removed from the pool.
+    /// Collected transactions are removed from the pool and the seen set.
     /// The payload is length-prefixed: `[u32_le len][bytes]...`
     pub async fn collect_payload(&self, max_bytes: usize) -> Vec<u8> {
         let mut txs = self.txs.lock().await;
+        let mut seen = self.seen.lock().await;
         let mut payload = Vec::new();
 
         while let Some(tx) = txs.front() {
@@ -61,6 +62,7 @@ impl Mempool {
                 break;
             }
             let tx = txs.pop_front().unwrap();
+            seen.remove(&Self::hash_tx(&tx));
             let len = tx.len() as u32;
             payload.extend_from_slice(&len.to_le_bytes());
             payload.extend_from_slice(&tx);
@@ -95,18 +97,7 @@ impl Mempool {
 }
 
 fn blake3_hash(data: &[u8]) -> TxHash {
-    // Simple hash using first 32 bytes of a basic hash
-    // Not using blake3 crate here to keep mempool dependency-light
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    data.hash(&mut hasher);
-    let h = hasher.finish();
-    let mut out = [0u8; 32];
-    out[..8].copy_from_slice(&h.to_le_bytes());
-    // Add length for disambiguation
-    out[8..12].copy_from_slice(&(data.len() as u32).to_le_bytes());
-    out
+    *blake3::hash(data).as_bytes()
 }
 
 impl Default for Mempool {

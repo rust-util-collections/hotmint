@@ -29,7 +29,11 @@ cargo build --workspace
 cargo test --workspace
 
 # run the 4-node in-process demo
-cargo run --bin hotmint-node
+cargo run --bin hotmint-demo
+
+# or initialize and run a production node (connects to ABCI app via Unix socket)
+cargo run --bin hotmint-node -- init
+cargo run --bin hotmint-node -- node
 ```
 
 ## Minimal Integration
@@ -113,6 +117,7 @@ for i in 0..N {
         Box::new(MyApp),
         Box::new(signers[i as usize].clone()),
         rx,
+        None,
     );
 
     tokio::spawn(async move { engine.run().await });

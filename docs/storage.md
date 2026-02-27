@@ -151,6 +151,7 @@ let engine = ConsensusEngine::new(
     Box::new(app),
     Box::new(signer),
     msg_rx,
+    None,
 );
 ```
 

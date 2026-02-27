@@ -44,7 +44,6 @@ pub struct ConsensusConfig {
 pub struct MempoolConfig {
     pub max_txs: usize,
     pub max_tx_bytes: usize,
-    pub max_payload_bytes: usize,
 }
 
 impl Default for NodeConfig {
@@ -66,7 +65,6 @@ impl Default for NodeConfig {
             mempool: MempoolConfig {
                 max_txs: 10_000,
                 max_tx_bytes: 1_048_576,
-                max_payload_bytes: 4_194_304,
             },
         }
     }

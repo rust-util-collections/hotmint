@@ -193,6 +193,7 @@ async fn run_node(
         0u64,
         validator_set.validator_count(),
     ));
+    let sync_status_rx = status_tx.subscribe();
     let app = AppWithStatus {
         inner: ipc_client,
         status_tx,
@@ -243,17 +244,18 @@ async fn run_node(
     // Sync responder: answer incoming sync requests from peers
     {
         let store = store.clone();
+        let sync_status_rx = sync_status_rx;
         let mut sync_req_rx = sync_req_rx;
         tokio::spawn(async move {
             use hotmint_types::sync::{SyncRequest, SyncResponse};
             while let Some(req) = sync_req_rx.recv().await {
                 let resp = match req.request {
                     SyncRequest::GetStatus => {
-                        let h = store.read().unwrap().tip_height();
+                        let (view, height, epoch, _) = *sync_status_rx.borrow();
                         SyncResponse::Status {
-                            last_committed_height: h,
-                            current_view: ViewNumber(0),
-                            epoch: EpochNumber(0),
+                            last_committed_height: Height(height),
+                            current_view: ViewNumber(view),
+                            epoch: EpochNumber(epoch),
                         }
                     }
                     SyncRequest::GetBlocks {

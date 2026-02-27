@@ -128,6 +128,7 @@ impl NetworkService {
     )> {
         let (notif_config, notif_handle) = NotifConfigBuilder::new(NOTIF_PROTOCOL.into())
             .with_max_size(MAX_NOTIFICATION_SIZE)
+            .with_handshake(vec![])
             .with_auto_accept_inbound(true)
             .with_sync_channel_size(1024)
             .with_async_channel_size(1024)
@@ -255,12 +256,10 @@ impl NetworkService {
                 debug!(peer = %peer, "notification stream closed");
             }
             NotificationEvent::NotificationReceived { peer, notification } => {
-                let sender = self
-                    .peer_map
-                    .peer_to_validator
-                    .get(&peer)
-                    .copied()
-                    .unwrap_or_default();
+                let Some(sender) = self.peer_map.peer_to_validator.get(&peer).copied() else {
+                    warn!(peer = %peer, "dropping notification from unknown peer");
+                    return;
+                };
                 match serde_cbor_2::from_slice::<ConsensusMessage>(&notification) {
                     Ok(msg) => {
                         let _ = self.msg_tx.send((sender, msg));
@@ -284,12 +283,11 @@ impl NetworkService {
                 request,
                 ..
             } => {
-                let sender = self
-                    .peer_map
-                    .peer_to_validator
-                    .get(&peer)
-                    .copied()
-                    .unwrap_or_default();
+                let Some(sender) = self.peer_map.peer_to_validator.get(&peer).copied() else {
+                    warn!(peer = %peer, "dropping request from unknown peer");
+                    self.reqresp_handle.reject_request(request_id);
+                    return;
+                };
                 match serde_cbor_2::from_slice::<ConsensusMessage>(&request) {
                     Ok(msg) => {
                         let _ = self.msg_tx.send((sender, msg));
