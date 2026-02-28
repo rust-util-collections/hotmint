@@ -11,19 +11,27 @@ use hotmint_network::service::PeerStatus;
 use hotmint_types::{BlockHash, Height};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
-use tokio::sync::watch;
+use tokio::sync::{Semaphore, watch};
+use tokio::time::{Duration, timeout};
 use tracing::{info, warn};
+
+const MAX_RPC_CONNECTIONS: usize = 256;
+const RPC_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Status tuple: (current_view, last_committed_height, epoch_number, validator_count, epoch_start_view)
+pub type StatusTuple = (u64, u64, u64, usize, u64);
 
 /// Shared state accessible by the RPC server
 pub struct RpcState {
     pub validator_id: u64,
     pub mempool: Arc<Mempool>,
-    /// (current_view, last_committed_height, epoch, validator_count)
-    pub status_rx: watch::Receiver<(u64, u64, u64, usize)>,
+    pub status_rx: watch::Receiver<StatusTuple>,
     /// Shared block store for block queries
     pub store: Arc<RwLock<Box<dyn BlockStore>>>,
     /// Peer info channel
     pub peer_info_rx: watch::Receiver<Vec<PeerStatus>>,
+    /// Live validator set for get_validators
+    pub validator_set_rx: watch::Receiver<Vec<ValidatorInfoResponse>>,
 }
 
 /// Simple JSON-RPC server over TCP (one JSON object per line)
@@ -49,14 +57,27 @@ impl RpcServer {
     }
 
     pub async fn run(self) {
+        let semaphore = Arc::new(Semaphore::new(MAX_RPC_CONNECTIONS));
         loop {
             match self.listener.accept().await {
                 Ok((stream, _addr)) => {
+                    let permit = match semaphore.clone().try_acquire_owned() {
+                        Ok(p) => p,
+                        Err(_) => {
+                            warn!("RPC connection limit reached, rejecting");
+                            drop(stream);
+                            continue;
+                        }
+                    };
                     let state = self.state.clone();
                     tokio::spawn(async move {
+                        let _permit = permit;
                         let (reader, mut writer) = stream.into_split();
                         let mut lines = BufReader::new(reader).lines();
-                        while let Ok(Some(line)) = lines.next_line().await {
+                        while let Ok(Some(line)) = timeout(RPC_READ_TIMEOUT, lines.next_line())
+                            .await
+                            .unwrap_or(Ok(None))
+                        {
                             let response = handle_request(&state, &line).await;
                             let mut json = serde_json::to_string(&response).unwrap_or_default();
                             json.push('\n');
@@ -84,7 +105,7 @@ async fn handle_request(state: &RpcState, line: &str) -> RpcResponse {
 
     match req.method.as_str() {
         "status" => {
-            let (view, height, epoch, validator_count) = *state.status_rx.borrow();
+            let (view, height, epoch, validator_count, _) = *state.status_rx.borrow();
             let info = StatusInfo {
                 validator_id: state.validator_id,
                 current_view: view,
@@ -145,46 +166,15 @@ async fn handle_request(state: &RpcState, line: &str) -> RpcResponse {
         }
 
         "get_validators" => {
-            let (_, _, _, _) = *state.status_rx.borrow();
-            // Read validator set from the store's genesis or from status
-            // For now, return from the peer info (validators are the ones we know about)
-            let store = state.store.read().unwrap();
-            // Get the latest committed block to find proposer info
-            let tip = store.tip_height();
-            drop(store);
-
-            // We don't have direct access to ValidatorSet from RPC.
-            // Return what we know: the peer list as validator info.
-            // A more complete implementation would pass ValidatorSet via watch channel.
-            let peers = state.peer_info_rx.borrow().clone();
-            let validators: Vec<ValidatorInfoResponse> = peers
-                .iter()
-                .map(|p| ValidatorInfoResponse {
-                    id: p.validator_id.0,
-                    power: 0, // not available from peer info
-                    public_key: String::new(),
-                })
-                .collect();
-
-            // If no peers, at minimum return our own validator
-            let result = if validators.is_empty() {
-                vec![ValidatorInfoResponse {
-                    id: state.validator_id,
-                    power: 0,
-                    public_key: String::new(),
-                }]
-            } else {
-                validators
-            };
-            let _ = tip; // silence unused warning
-            json_ok(req.id, &result)
+            let validators = state.validator_set_rx.borrow().clone();
+            json_ok(req.id, &validators)
         }
 
         "get_epoch" => {
-            let (_, _, epoch, validator_count) = *state.status_rx.borrow();
+            let (_, _, epoch, validator_count, start_view) = *state.status_rx.borrow();
             let info = EpochInfo {
                 number: epoch,
-                start_view: 0, // not available from status channel
+                start_view,
                 validator_count,
             };
             json_ok(req.id, &info)

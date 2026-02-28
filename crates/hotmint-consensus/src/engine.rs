@@ -41,7 +41,7 @@ pub struct ConsensusEngine {
     vote_collector: VoteCollector,
     pacemaker: Pacemaker,
     pacemaker_config: PacemakerConfig,
-    msg_rx: mpsc::UnboundedReceiver<(ValidatorId, ConsensusMessage)>,
+    msg_rx: mpsc::Receiver<(ValidatorId, ConsensusMessage)>,
     /// Collected status certs from replicas (for leader)
     status_count: usize,
     /// The QC formed in this view's first voting round (used to build DoubleCert)
@@ -66,7 +66,7 @@ impl ConsensusEngine {
         network: Box<dyn NetworkSink>,
         app: Box<dyn Application>,
         signer: Box<dyn Signer>,
-        msg_rx: mpsc::UnboundedReceiver<(ValidatorId, ConsensusMessage)>,
+        msg_rx: mpsc::Receiver<(ValidatorId, ConsensusMessage)>,
         config: EngineConfig,
     ) -> Self {
         let pc = config.pacemaker.unwrap_or_default();

@@ -63,7 +63,7 @@ pub struct BlockInfo {
 }
 
 /// Validator info returned by get_validators
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ValidatorInfoResponse {
     pub id: u64,
     pub power: u64,

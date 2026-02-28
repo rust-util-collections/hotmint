@@ -95,10 +95,10 @@ pub struct NetworkService {
     reqresp_handle: RequestResponseHandle,
     sync_handle: RequestResponseHandle,
     peer_map: PeerMap,
-    msg_tx: mpsc::UnboundedSender<(ValidatorId, ConsensusMessage)>,
-    cmd_rx: mpsc::UnboundedReceiver<NetCommand>,
-    sync_req_tx: mpsc::UnboundedSender<IncomingSyncRequest>,
-    sync_resp_tx: mpsc::UnboundedSender<SyncResponse>,
+    msg_tx: mpsc::Sender<(ValidatorId, ConsensusMessage)>,
+    cmd_rx: mpsc::Receiver<NetCommand>,
+    sync_req_tx: mpsc::Sender<IncomingSyncRequest>,
+    sync_resp_tx: mpsc::Sender<SyncResponse>,
     peer_info_tx: watch::Sender<Vec<PeerStatus>>,
 }
 
@@ -121,9 +121,9 @@ impl NetworkService {
     ) -> Result<(
         Self,
         Litep2pNetworkSink,
-        mpsc::UnboundedReceiver<(ValidatorId, ConsensusMessage)>,
-        mpsc::UnboundedReceiver<IncomingSyncRequest>,
-        mpsc::UnboundedReceiver<SyncResponse>,
+        mpsc::Receiver<(ValidatorId, ConsensusMessage)>,
+        mpsc::Receiver<IncomingSyncRequest>,
+        mpsc::Receiver<SyncResponse>,
         watch::Receiver<Vec<PeerStatus>>,
     )> {
         let (notif_config, notif_handle) = NotifConfigBuilder::new(NOTIF_PROTOCOL.into())
@@ -167,10 +167,10 @@ impl NetworkService {
             info!(address = %addr, "listening on");
         }
 
-        let (msg_tx, msg_rx) = mpsc::unbounded_channel();
-        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-        let (sync_req_tx, sync_req_rx) = mpsc::unbounded_channel();
-        let (sync_resp_tx, sync_resp_rx) = mpsc::unbounded_channel();
+        let (msg_tx, msg_rx) = mpsc::channel(8192);
+        let (cmd_tx, cmd_rx) = mpsc::channel(4096);
+        let (sync_req_tx, sync_req_rx) = mpsc::channel(256);
+        let (sync_resp_tx, sync_resp_rx) = mpsc::channel(256);
 
         // Build initial peer info
         let initial_peers: Vec<PeerStatus> = peer_map
@@ -262,7 +262,7 @@ impl NetworkService {
                 };
                 match serde_cbor_2::from_slice::<ConsensusMessage>(&notification) {
                     Ok(msg) => {
-                        let _ = self.msg_tx.send((sender, msg));
+                        let _ = self.msg_tx.try_send((sender, msg));
                     }
                     Err(e) => {
                         warn!(error = %e, "failed to decode notification");
@@ -290,7 +290,7 @@ impl NetworkService {
                 };
                 match serde_cbor_2::from_slice::<ConsensusMessage>(&request) {
                     Ok(msg) => {
-                        let _ = self.msg_tx.send((sender, msg));
+                        let _ = self.msg_tx.try_send((sender, msg));
                         self.reqresp_handle.send_response(request_id, vec![]);
                     }
                     Err(e) => {
@@ -317,7 +317,7 @@ impl NetworkService {
                 // Forward sync request to the sync responder
                 match serde_cbor_2::from_slice::<SyncRequest>(&request) {
                     Ok(req) => {
-                        let _ = self.sync_req_tx.send(IncomingSyncRequest {
+                        let _ = self.sync_req_tx.try_send(IncomingSyncRequest {
                             request_id,
                             peer,
                             request: req,
@@ -342,7 +342,7 @@ impl NetworkService {
                 // Forward sync response to the sync requester
                 match serde_cbor_2::from_slice::<SyncResponse>(&response) {
                     Ok(resp) => {
-                        let _ = self.sync_resp_tx.send(resp);
+                        let _ = self.sync_resp_tx.try_send(resp);
                     }
                     Err(e) => {
                         warn!(error = %e, "failed to decode sync response");
@@ -353,7 +353,7 @@ impl NetworkService {
                 debug!(peer = %peer, error = ?error, "sync request failed");
                 let _ = self
                     .sync_resp_tx
-                    .send(SyncResponse::Error(format!("request failed: {error:?}")));
+                    .try_send(SyncResponse::Error(format!("request failed: {error:?}")));
             }
         }
     }
@@ -434,27 +434,31 @@ impl NetworkService {
 /// Also provides methods for peer management and sync.
 #[derive(Clone)]
 pub struct Litep2pNetworkSink {
-    cmd_tx: mpsc::UnboundedSender<NetCommand>,
+    cmd_tx: mpsc::Sender<NetCommand>,
 }
 
 impl Litep2pNetworkSink {
     pub fn add_peer(&self, vid: ValidatorId, pid: PeerId, addrs: Vec<Multiaddr>) {
-        let _ = self.cmd_tx.send(NetCommand::AddPeer(vid, pid, addrs));
+        let _ = self.cmd_tx.try_send(NetCommand::AddPeer(vid, pid, addrs));
     }
 
     pub fn remove_peer(&self, vid: ValidatorId) {
-        let _ = self.cmd_tx.send(NetCommand::RemovePeer(vid));
+        let _ = self.cmd_tx.try_send(NetCommand::RemovePeer(vid));
     }
 
     pub fn send_sync_request(&self, peer_id: PeerId, request: &SyncRequest) {
         if let Ok(bytes) = serde_cbor_2::to_vec(request) {
-            let _ = self.cmd_tx.send(NetCommand::SyncRequest(peer_id, bytes));
+            let _ = self
+                .cmd_tx
+                .try_send(NetCommand::SyncRequest(peer_id, bytes));
         }
     }
 
     pub fn send_sync_response(&self, request_id: RequestId, response: &SyncResponse) {
         if let Ok(bytes) = serde_cbor_2::to_vec(response) {
-            let _ = self.cmd_tx.send(NetCommand::SyncRespond(request_id, bytes));
+            let _ = self
+                .cmd_tx
+                .try_send(NetCommand::SyncRespond(request_id, bytes));
         }
     }
 }
@@ -462,13 +466,13 @@ impl Litep2pNetworkSink {
 impl NetworkSink for Litep2pNetworkSink {
     fn broadcast(&self, msg: ConsensusMessage) {
         if let Ok(bytes) = serde_cbor_2::to_vec(&msg) {
-            let _ = self.cmd_tx.send(NetCommand::Broadcast(bytes));
+            let _ = self.cmd_tx.try_send(NetCommand::Broadcast(bytes));
         }
     }
 
     fn send_to(&self, target: ValidatorId, msg: ConsensusMessage) {
         if let Ok(bytes) = serde_cbor_2::to_vec(&msg) {
-            let _ = self.cmd_tx.send(NetCommand::SendTo(target, bytes));
+            let _ = self.cmd_tx.try_send(NetCommand::SendTo(target, bytes));
         }
     }
 }

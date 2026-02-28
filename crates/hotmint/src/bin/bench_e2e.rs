@@ -64,13 +64,11 @@ async fn main() {
     let validator_set = ValidatorSet::new(validator_infos);
 
     let mut receivers = HashMap::new();
-    let mut all_senders: HashMap<
-        ValidatorId,
-        mpsc::UnboundedSender<(ValidatorId, ConsensusMessage)>,
-    > = HashMap::new();
+    let mut all_senders: HashMap<ValidatorId, mpsc::Sender<(ValidatorId, ConsensusMessage)>> =
+        HashMap::new();
 
     for i in 0..NUM_VALIDATORS {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(8192);
         receivers.insert(ValidatorId(i), rx);
         all_senders.insert(ValidatorId(i), tx);
     }
@@ -81,13 +79,11 @@ async fn main() {
     for i in 0..NUM_VALIDATORS {
         let vid = ValidatorId(i);
         let rx = pnk!(receivers.remove(&vid));
-        let senders: Vec<(
-            ValidatorId,
-            mpsc::UnboundedSender<(ValidatorId, ConsensusMessage)>,
-        )> = all_senders
-            .iter()
-            .map(|(&id, tx)| (id, tx.clone()))
-            .collect();
+        let senders: Vec<(ValidatorId, mpsc::Sender<(ValidatorId, ConsensusMessage)>)> =
+            all_senders
+                .iter()
+                .map(|(&id, tx)| (id, tx.clone()))
+                .collect();
 
         let network = ChannelNetwork::new(vid, senders);
         let store = Arc::new(RwLock::new(

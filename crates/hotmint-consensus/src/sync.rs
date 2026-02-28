@@ -25,12 +25,13 @@ pub async fn sync_to_tip(
     app: &dyn Application,
     current_epoch: &mut Epoch,
     last_committed_height: &mut Height,
-    request_tx: &mpsc::UnboundedSender<SyncRequest>,
-    response_rx: &mut mpsc::UnboundedReceiver<SyncResponse>,
+    request_tx: &mpsc::Sender<SyncRequest>,
+    response_rx: &mut mpsc::Receiver<SyncResponse>,
 ) -> Result<()> {
     // First, get status from peer
     request_tx
         .send(SyncRequest::GetStatus)
+        .await
         .map_err(|_| eg!("sync channel closed"))?;
 
     let peer_status = match timeout(SYNC_TIMEOUT, response_rx.recv()).await {
@@ -75,6 +76,7 @@ pub async fn sync_to_tip(
                 from_height: from,
                 to_height: to,
             })
+            .await
             .map_err(|_| eg!("sync channel closed"))?;
 
         let blocks = match timeout(SYNC_TIMEOUT, response_rx.recv()).await {

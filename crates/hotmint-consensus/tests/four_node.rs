@@ -47,13 +47,11 @@ fn spawn_network(n: u64) -> (Vec<Arc<AtomicU64>>, Vec<tokio::task::JoinHandle<()
     let validator_set = ValidatorSet::new(validator_infos);
 
     let mut receivers = HashMap::new();
-    let mut all_senders: HashMap<
-        ValidatorId,
-        mpsc::UnboundedSender<(ValidatorId, ConsensusMessage)>,
-    > = HashMap::new();
+    let mut all_senders: HashMap<ValidatorId, mpsc::Sender<(ValidatorId, ConsensusMessage)>> =
+        HashMap::new();
 
     for i in 0..n {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(8192);
         receivers.insert(ValidatorId(i), rx);
         all_senders.insert(ValidatorId(i), tx);
     }
@@ -64,13 +62,11 @@ fn spawn_network(n: u64) -> (Vec<Arc<AtomicU64>>, Vec<tokio::task::JoinHandle<()
     for i in 0..n {
         let vid = ValidatorId(i);
         let rx = receivers.remove(&vid).unwrap();
-        let senders: Vec<(
-            ValidatorId,
-            mpsc::UnboundedSender<(ValidatorId, ConsensusMessage)>,
-        )> = all_senders
-            .iter()
-            .map(|(&id, tx)| (id, tx.clone()))
-            .collect();
+        let senders: Vec<(ValidatorId, mpsc::Sender<(ValidatorId, ConsensusMessage)>)> =
+            all_senders
+                .iter()
+                .map(|(&id, tx)| (id, tx.clone()))
+                .collect();
 
         let network = ChannelNetwork::new(vid, senders);
         let store = Arc::new(RwLock::new(

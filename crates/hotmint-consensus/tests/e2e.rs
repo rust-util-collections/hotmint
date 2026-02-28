@@ -28,7 +28,7 @@ use tokio::sync::mpsc;
 // Dynamic network: shared routing table so joining nodes can be wired in
 // ---------------------------------------------------------------------------
 
-type MsgSender = mpsc::UnboundedSender<(ValidatorId, ConsensusMessage)>;
+type MsgSender = mpsc::Sender<(ValidatorId, ConsensusMessage)>;
 
 /// Shared mutable routing table used by all nodes in a test.
 #[derive(Clone)]
@@ -58,7 +58,7 @@ impl NetworkSink for DynamicNetwork {
         let table = self.routing.0.lock().unwrap();
         for (id, tx) in table.iter() {
             if *id != self.self_id {
-                let _ = tx.send((self.self_id, msg.clone()));
+                let _ = tx.try_send((self.self_id, msg.clone()));
             }
         }
     }
@@ -66,7 +66,7 @@ impl NetworkSink for DynamicNetwork {
     fn send_to(&self, target: ValidatorId, msg: ConsensusMessage) {
         let table = self.routing.0.lock().unwrap();
         if let Some(tx) = table.get(&target) {
-            let _ = tx.send((self.self_id, msg));
+            let _ = tx.try_send((self.self_id, msg));
         }
     }
 }
@@ -82,10 +82,10 @@ fn spawn_node(
     routing: &SharedRouting,
     app: impl Application + 'static,
 ) -> (
-    mpsc::UnboundedSender<(ValidatorId, ConsensusMessage)>,
+    mpsc::Sender<(ValidatorId, ConsensusMessage)>,
     tokio::task::JoinHandle<()>,
 ) {
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::channel(8192);
     routing.register(vid, tx.clone());
 
     let network = DynamicNetwork {
@@ -457,19 +457,18 @@ async fn test_equivocation_detected_via_injected_votes() {
     };
 
     // Create channels manually so we can pre-load V1's queue
-    let mut node_txs: Vec<mpsc::UnboundedSender<(ValidatorId, ConsensusMessage)>> = Vec::new();
-    let mut node_rxs: Vec<Option<mpsc::UnboundedReceiver<(ValidatorId, ConsensusMessage)>>> =
-        Vec::new();
+    let mut node_txs: Vec<mpsc::Sender<(ValidatorId, ConsensusMessage)>> = Vec::new();
+    let mut node_rxs: Vec<Option<mpsc::Receiver<(ValidatorId, ConsensusMessage)>>> = Vec::new();
     for i in 0..4u64 {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(8192);
         routing.register(ValidatorId(i), tx.clone());
         node_txs.push(tx);
         node_rxs.push(Some(rx));
     }
 
     // Pre-load equivocating votes into V1's queue (V1 is leader of view 1)
-    let _ = node_txs[1].send((ValidatorId(0), ConsensusMessage::VoteMsg(vote_a)));
-    let _ = node_txs[1].send((ValidatorId(0), ConsensusMessage::VoteMsg(vote_b)));
+    let _ = node_txs[1].try_send((ValidatorId(0), ConsensusMessage::VoteMsg(vote_a)));
+    let _ = node_txs[1].try_send((ValidatorId(0), ConsensusMessage::VoteMsg(vote_b)));
 
     let mut equivocation_counters: Vec<Arc<AtomicU64>> = Vec::new();
     let mut handles = Vec::new();

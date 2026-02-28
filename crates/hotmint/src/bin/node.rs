@@ -194,13 +194,28 @@ async fn run_node(
     let (status_tx, status_rx) = watch::channel((
         0u64,
         state.last_committed_height.as_u64(),
-        0u64,
+        state.current_epoch.number.as_u64(),
         validator_set.validator_count(),
+        state.current_epoch.start_view.as_u64(),
     ));
     let sync_status_rx = status_tx.subscribe();
+
+    // Validator set watch channel (updated on epoch transitions via on_commit)
+    let initial_vs: Vec<hotmint::api::types::ValidatorInfoResponse> = validator_set
+        .validators()
+        .iter()
+        .map(|v| hotmint::api::types::ValidatorInfoResponse {
+            id: v.id.0,
+            power: v.power,
+            public_key: hex::encode(&v.public_key.0),
+        })
+        .collect();
+    let (vs_tx, vs_rx) = watch::channel(initial_vs);
+
     let app = AppWithStatus {
         inner: ipc_client,
         status_tx,
+        vs_tx,
     };
 
     // 10. Create mempool
@@ -216,6 +231,7 @@ async fn run_node(
         status_rx,
         store: store.clone(),
         peer_info_rx,
+        validator_set_rx: vs_rx,
     };
     let rpc_server = hotmint::api::rpc::RpcServer::bind(&config.rpc.laddr, rpc_state)
         .await
@@ -259,7 +275,7 @@ async fn run_node(
             while let Some(req) = sync_req_rx.recv().await {
                 let resp = match req.request {
                     SyncRequest::GetStatus => {
-                        let (view, height, epoch, _) = *sync_status_rx.borrow();
+                        let (view, height, epoch, _, _) = *sync_status_rx.borrow();
                         SyncResponse::Status {
                             last_committed_height: Height(height),
                             current_view: ViewNumber(view),
@@ -294,7 +310,8 @@ async fn run_node(
 /// while also updating the RPC status watch channel on each commit.
 struct AppWithStatus {
     inner: IpcApplicationClient,
-    status_tx: watch::Sender<(u64, u64, u64, usize)>,
+    status_tx: watch::Sender<hotmint::api::rpc::StatusTuple>,
+    vs_tx: watch::Sender<Vec<hotmint::api::types::ValidatorInfoResponse>>,
 }
 
 impl Application for AppWithStatus {
@@ -321,7 +338,20 @@ impl Application for AppWithStatus {
             ctx.height.as_u64(),
             ctx.epoch.as_u64(),
             ctx.validator_set.validator_count(),
+            0, // start_view updated on epoch change; approximation here
         ));
+        // Update validator set for RPC
+        let vs: Vec<hotmint::api::types::ValidatorInfoResponse> = ctx
+            .validator_set
+            .validators()
+            .iter()
+            .map(|v| hotmint::api::types::ValidatorInfoResponse {
+                id: v.id.0,
+                power: v.power,
+                public_key: hex::encode(&v.public_key.0),
+            })
+            .collect();
+        let _ = self.vs_tx.send(vs);
         Ok(())
     }
 

@@ -10,10 +10,11 @@ use tokio::sync::watch;
 
 async fn setup_server() -> (String, tokio::task::JoinHandle<()>) {
     let mempool = Arc::new(Mempool::new(100, 1024));
-    let (_status_tx, status_rx) = watch::channel((1u64, 0u64, 0u64, 4usize));
+    let (_status_tx, status_rx) = watch::channel((1u64, 0u64, 0u64, 4usize, 0u64));
     let store: Arc<RwLock<Box<dyn hotmint_consensus::store::BlockStore>>> =
         Arc::new(RwLock::new(Box::new(MemoryBlockStore::new())));
     let (_peer_tx, peer_info_rx) = watch::channel(vec![]);
+    let (_vs_tx, validator_set_rx) = watch::channel(vec![]);
 
     let state = RpcState {
         validator_id: 42,
@@ -21,6 +22,7 @@ async fn setup_server() -> (String, tokio::task::JoinHandle<()>) {
         status_rx,
         store,
         peer_info_rx,
+        validator_set_rx,
     };
 
     let server = RpcServer::bind("127.0.0.1:0", state).await.unwrap();
