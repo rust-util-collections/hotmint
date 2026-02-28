@@ -9,11 +9,11 @@ use tracing::{Level, info};
 use hotmint::abci::client::IpcApplicationClient;
 use hotmint::config::{self, GenesisDoc, NodeConfig, PrivValidatorKey};
 use hotmint::consensus::application::Application;
-use hotmint::consensus::engine::ConsensusEngine;
+use hotmint::consensus::engine::{ConsensusEngine, EngineConfig};
 use hotmint::consensus::pacemaker::PacemakerConfig;
 use hotmint::consensus::state::ConsensusState;
 use hotmint::consensus::store::BlockStore;
-use hotmint::crypto::Ed25519Signer;
+use hotmint::crypto::{Ed25519Signer, Ed25519Verifier};
 use hotmint::mempool::Mempool;
 use hotmint::network::service::{NetworkService, PeerMap};
 use hotmint::prelude::*;
@@ -238,7 +238,11 @@ async fn run_node(
         Box::new(app),
         Box::new(signer),
         msg_rx,
-        Some(pacemaker_config),
+        EngineConfig {
+            verifier: Box::new(Ed25519Verifier),
+            pacemaker: Some(pacemaker_config),
+            persistence: Some(Box::new(pcs)),
+        },
     );
 
     // 13. Spawn background tasks

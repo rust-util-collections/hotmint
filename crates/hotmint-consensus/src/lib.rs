@@ -12,6 +12,6 @@ pub mod sync;
 pub mod view_protocol;
 pub mod vote_collector;
 
-pub use engine::ConsensusEngine;
+pub use engine::{ConsensusEngine, EngineConfig, StatePersistence};
 pub use pacemaker::PacemakerConfig;
 pub use state::ConsensusState;

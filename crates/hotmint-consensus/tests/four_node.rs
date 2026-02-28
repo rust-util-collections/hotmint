@@ -6,11 +6,11 @@ use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use hotmint_consensus::application::Application;
-use hotmint_consensus::engine::ConsensusEngine;
+use hotmint_consensus::engine::{ConsensusEngine, EngineConfig};
 use hotmint_consensus::network::ChannelNetwork;
 use hotmint_consensus::state::ConsensusState;
 use hotmint_consensus::store::MemoryBlockStore;
-use hotmint_crypto::Ed25519Signer;
+use hotmint_crypto::{Ed25519Signer, Ed25519Verifier};
 use hotmint_types::*;
 use tokio::sync::mpsc;
 
@@ -91,7 +91,11 @@ fn spawn_network(n: u64) -> (Vec<Arc<AtomicU64>>, Vec<tokio::task::JoinHandle<()
             Box::new(app),
             Box::new(signer),
             rx,
-            None,
+            EngineConfig {
+                verifier: Box::new(Ed25519Verifier),
+                pacemaker: None,
+                persistence: None,
+            },
         );
 
         handles.push(tokio::spawn(async move { engine.run().await }));

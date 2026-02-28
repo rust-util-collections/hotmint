@@ -13,11 +13,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use hotmint_consensus::application::Application;
-use hotmint_consensus::engine::ConsensusEngine;
+use hotmint_consensus::engine::{ConsensusEngine, EngineConfig};
 use hotmint_consensus::network::NetworkSink;
 use hotmint_consensus::state::ConsensusState;
 use hotmint_consensus::store::MemoryBlockStore;
-use hotmint_crypto::Ed25519Signer;
+use hotmint_crypto::{Ed25519Signer, Ed25519Verifier};
 use hotmint_types::context::BlockContext;
 use hotmint_types::evidence::EquivocationProof;
 use hotmint_types::validator_update::{EndBlockResponse, ValidatorUpdate};
@@ -103,7 +103,11 @@ fn spawn_node(
         Box::new(app),
         Box::new(signer),
         rx,
-        None,
+        EngineConfig {
+            verifier: Box::new(Ed25519Verifier),
+            pacemaker: None,
+            persistence: None,
+        },
     );
 
     let handle = tokio::spawn(async move { engine.run().await });
@@ -430,9 +434,7 @@ async fn test_equivocation_detected_via_injected_votes() {
     let (vs, signers) = make_validator_set(4);
     let routing = SharedRouting::new();
 
-    // Separate signer for injection (Ed25519Signer doesn't impl Clone).
-    // Equivocation detection is structural, exact signature bytes don't matter.
-    let injector_signer = Ed25519Signer::generate(ValidatorId(0));
+    // Build equivocating votes using V0's real signer (before it's consumed)
     let view = ViewNumber(1);
     let hash_a = BlockHash([0xAAu8; 32]);
     let hash_b = BlockHash([0xBBu8; 32]);
@@ -442,15 +444,15 @@ async fn test_equivocation_detected_via_injected_votes() {
     let vote_a = Vote {
         block_hash: hash_a,
         view,
-        validator: injector_signer.validator_id(),
-        signature: injector_signer.sign(&bytes_a),
+        validator: signers[0].validator_id(),
+        signature: signers[0].sign(&bytes_a),
         vote_type: VoteType::Vote,
     };
     let vote_b = Vote {
         block_hash: hash_b,
         view,
-        validator: injector_signer.validator_id(),
-        signature: injector_signer.sign(&bytes_b),
+        validator: signers[0].validator_id(),
+        signature: signers[0].sign(&bytes_b),
         vote_type: VoteType::Vote,
     };
 
@@ -496,7 +498,11 @@ async fn test_equivocation_detected_via_injected_votes() {
             Box::new(app),
             Box::new(signer),
             rx.take().unwrap(),
-            None,
+            EngineConfig {
+                verifier: Box::new(Ed25519Verifier),
+                pacemaker: None,
+                persistence: None,
+            },
         );
         handles.push(tokio::spawn(async move { engine.run().await }));
     }

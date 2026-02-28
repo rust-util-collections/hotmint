@@ -97,6 +97,27 @@ impl PersistentConsensusState {
     }
 }
 
+impl hotmint_consensus::engine::StatePersistence for PersistentConsensusState {
+    fn save_current_view(&mut self, view: ViewNumber) {
+        self.save_current_view(view);
+    }
+    fn save_locked_qc(&mut self, qc: &QuorumCertificate) {
+        self.save_locked_qc(qc);
+    }
+    fn save_highest_qc(&mut self, qc: &QuorumCertificate) {
+        self.save_highest_qc(qc);
+    }
+    fn save_last_committed_height(&mut self, height: Height) {
+        self.save_last_committed_height(height);
+    }
+    fn save_current_epoch(&mut self, epoch: &Epoch) {
+        self.save_current_epoch(epoch);
+    }
+    fn flush(&self) {
+        self.flush();
+    }
+}
+
 impl Default for PersistentConsensusState {
     fn default() -> Self {
         Self::new()

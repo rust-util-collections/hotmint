@@ -324,7 +324,10 @@ pub fn on_prepare(
 
 // --- Signing helpers ---
 
-fn status_signing_bytes(view: ViewNumber, locked_qc: &Option<QuorumCertificate>) -> Vec<u8> {
+pub(crate) fn status_signing_bytes(
+    view: ViewNumber,
+    locked_qc: &Option<QuorumCertificate>,
+) -> Vec<u8> {
     let mut buf = Vec::new();
     buf.push(b'S');
     buf.extend_from_slice(&view.as_u64().to_le_bytes());
@@ -335,7 +338,7 @@ fn status_signing_bytes(view: ViewNumber, locked_qc: &Option<QuorumCertificate>)
     buf
 }
 
-fn proposal_signing_bytes(block: &Block, justify: &QuorumCertificate) -> Vec<u8> {
+pub(crate) fn proposal_signing_bytes(block: &Block, justify: &QuorumCertificate) -> Vec<u8> {
     let mut buf = Vec::new();
     buf.push(b'P');
     buf.extend_from_slice(&block.hash.0);
@@ -344,7 +347,7 @@ fn proposal_signing_bytes(block: &Block, justify: &QuorumCertificate) -> Vec<u8>
     buf
 }
 
-fn prepare_signing_bytes(qc: &QuorumCertificate) -> Vec<u8> {
+pub(crate) fn prepare_signing_bytes(qc: &QuorumCertificate) -> Vec<u8> {
     let mut buf = Vec::new();
     buf.push(b'Q');
     buf.extend_from_slice(&qc.block_hash.0);

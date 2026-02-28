@@ -32,7 +32,10 @@ impl AggregateSignature {
             return Err(eg!("duplicate signature from validator {}", index));
         }
         self.signers[index] = true;
-        self.signatures.push(sig);
+        // Insert in sorted position so signatures stay in index order
+        // (required by verify_aggregate which walks signers left-to-right).
+        let pos = self.signers[..index].iter().filter(|&&s| s).count();
+        self.signatures.insert(pos, sig);
         Ok(())
     }
 

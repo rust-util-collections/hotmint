@@ -197,7 +197,7 @@ impl Pacemaker {
     }
 }
 
-fn wish_signing_bytes(target_view: ViewNumber) -> Vec<u8> {
+pub(crate) fn wish_signing_bytes(target_view: ViewNumber) -> Vec<u8> {
     let mut buf = Vec::with_capacity(9);
     buf.push(b'W');
     buf.extend_from_slice(&target_view.as_u64().to_le_bytes());

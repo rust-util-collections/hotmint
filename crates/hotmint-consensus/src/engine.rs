@@ -21,12 +21,23 @@ use tracing::{info, warn};
 /// Shared block store type used by the engine, RPC, and sync responder.
 pub type SharedBlockStore = Arc<RwLock<Box<dyn BlockStore>>>;
 
+/// Trait for persisting critical consensus state across restarts.
+pub trait StatePersistence: Send {
+    fn save_current_view(&mut self, view: ViewNumber);
+    fn save_locked_qc(&mut self, qc: &QuorumCertificate);
+    fn save_highest_qc(&mut self, qc: &QuorumCertificate);
+    fn save_last_committed_height(&mut self, height: Height);
+    fn save_current_epoch(&mut self, epoch: &Epoch);
+    fn flush(&self);
+}
+
 pub struct ConsensusEngine {
     state: ConsensusState,
     store: SharedBlockStore,
     network: Box<dyn NetworkSink>,
     app: Box<dyn Application>,
     signer: Box<dyn Signer>,
+    verifier: Box<dyn Verifier>,
     vote_collector: VoteCollector,
     pacemaker: Pacemaker,
     pacemaker_config: PacemakerConfig,
@@ -37,6 +48,15 @@ pub struct ConsensusEngine {
     current_view_qc: Option<QuorumCertificate>,
     /// Pending epoch transition (set by try_commit, applied in advance_view_to)
     pending_epoch: Option<Epoch>,
+    /// Optional state persistence (for crash recovery).
+    persistence: Option<Box<dyn StatePersistence>>,
+}
+
+/// Configuration for ConsensusEngine.
+pub struct EngineConfig {
+    pub verifier: Box<dyn Verifier>,
+    pub pacemaker: Option<PacemakerConfig>,
+    pub persistence: Option<Box<dyn StatePersistence>>,
 }
 
 impl ConsensusEngine {
@@ -47,15 +67,16 @@ impl ConsensusEngine {
         app: Box<dyn Application>,
         signer: Box<dyn Signer>,
         msg_rx: mpsc::UnboundedReceiver<(ValidatorId, ConsensusMessage)>,
-        pacemaker_config: Option<PacemakerConfig>,
+        config: EngineConfig,
     ) -> Self {
-        let pc = pacemaker_config.unwrap_or_default();
+        let pc = config.pacemaker.unwrap_or_default();
         Self {
             state,
             store,
             network,
             app,
             signer,
+            verifier: config.verifier,
             vote_collector: VoteCollector::new(),
             pacemaker: Pacemaker::with_config(pc.clone()),
             pacemaker_config: pc,
@@ -63,6 +84,7 @@ impl ConsensusEngine {
             status_count: 0,
             current_view_qc: None,
             pending_epoch: None,
+            persistence: config.persistence,
         }
     }
 
@@ -164,7 +186,120 @@ impl ConsensusEngine {
         }
     }
 
+    /// Verify the cryptographic signature on an inbound consensus message.
+    /// Returns false (and logs a warning) if verification fails.
+    fn verify_message(&self, msg: &ConsensusMessage) -> bool {
+        let vs = &self.state.validator_set;
+        match msg {
+            ConsensusMessage::Propose {
+                block,
+                justify,
+                signature,
+                ..
+            } => {
+                let proposer = vs.get(block.proposer);
+                let Some(vi) = proposer else {
+                    warn!(proposer = %block.proposer, "propose from unknown validator");
+                    return false;
+                };
+                let bytes = view_protocol::proposal_signing_bytes(block, justify);
+                if !self.verifier.verify(&vi.public_key, &bytes, signature) {
+                    warn!(proposer = %block.proposer, "invalid proposal signature");
+                    return false;
+                }
+                true
+            }
+            ConsensusMessage::VoteMsg(vote) | ConsensusMessage::Vote2Msg(vote) => {
+                let Some(vi) = vs.get(vote.validator) else {
+                    warn!(validator = %vote.validator, "vote from unknown validator");
+                    return false;
+                };
+                let bytes = Vote::signing_bytes(vote.view, &vote.block_hash, vote.vote_type);
+                if !self
+                    .verifier
+                    .verify(&vi.public_key, &bytes, &vote.signature)
+                {
+                    warn!(validator = %vote.validator, "invalid vote signature");
+                    return false;
+                }
+                true
+            }
+            ConsensusMessage::Prepare {
+                certificate,
+                signature,
+            } => {
+                // Verify the leader's signature on the prepare message
+                let leader = vs.leader_for_view(certificate.view);
+                let bytes = view_protocol::prepare_signing_bytes(certificate);
+                if !self.verifier.verify(&leader.public_key, &bytes, signature) {
+                    warn!(view = %certificate.view, "invalid prepare signature");
+                    return false;
+                }
+                // Also verify the QC's aggregate signature
+                let qc_bytes =
+                    Vote::signing_bytes(certificate.view, &certificate.block_hash, VoteType::Vote);
+                if !self
+                    .verifier
+                    .verify_aggregate(vs, &qc_bytes, &certificate.aggregate_signature)
+                {
+                    warn!(view = %certificate.view, "invalid QC aggregate signature");
+                    return false;
+                }
+                true
+            }
+            ConsensusMessage::Wish {
+                target_view,
+                validator,
+                signature,
+                ..
+            } => {
+                let Some(vi) = vs.get(*validator) else {
+                    warn!(validator = %validator, "wish from unknown validator");
+                    return false;
+                };
+                let bytes = crate::pacemaker::wish_signing_bytes(*target_view);
+                if !self.verifier.verify(&vi.public_key, &bytes, signature) {
+                    warn!(validator = %validator, "invalid wish signature");
+                    return false;
+                }
+                true
+            }
+            ConsensusMessage::TimeoutCert(tc) => {
+                // Verify the TC's aggregate signature over wish signing bytes
+                let bytes = crate::pacemaker::wish_signing_bytes(ViewNumber(tc.view.as_u64() + 1));
+                if !self
+                    .verifier
+                    .verify_aggregate(vs, &bytes, &tc.aggregate_signature)
+                {
+                    warn!(view = %tc.view, "invalid TC aggregate signature");
+                    return false;
+                }
+                true
+            }
+            ConsensusMessage::StatusCert {
+                locked_qc,
+                validator,
+                signature,
+            } => {
+                let Some(vi) = vs.get(*validator) else {
+                    warn!(validator = %validator, "status from unknown validator");
+                    return false;
+                };
+                let bytes = view_protocol::status_signing_bytes(self.state.current_view, locked_qc);
+                if !self.verifier.verify(&vi.public_key, &bytes, signature) {
+                    warn!(validator = %validator, "invalid status signature");
+                    return false;
+                }
+                true
+            }
+        }
+    }
+
     fn handle_message(&mut self, _sender: ValidatorId, msg: ConsensusMessage) -> Result<()> {
+        if !self.verify_message(&msg) {
+            return Ok(());
+        }
+
         match msg {
             ConsensusMessage::Propose {
                 block,
@@ -502,6 +637,21 @@ impl ConsensusEngine {
         self.pacemaker.on_timeout();
     }
 
+    fn persist_state(&mut self) {
+        if let Some(p) = self.persistence.as_mut() {
+            p.save_current_view(self.state.current_view);
+            if let Some(ref qc) = self.state.locked_qc {
+                p.save_locked_qc(qc);
+            }
+            if let Some(ref qc) = self.state.highest_qc {
+                p.save_highest_qc(qc);
+            }
+            p.save_last_committed_height(self.state.last_committed_height);
+            p.save_current_epoch(&self.state.current_epoch);
+            p.flush();
+        }
+    }
+
     fn advance_view(&mut self, trigger: ViewEntryTrigger) {
         let new_view = match &trigger {
             ViewEntryTrigger::DoubleCert(_) => self.state.current_view.next(),
@@ -559,6 +709,8 @@ impl ConsensusEngine {
         } else {
             self.pacemaker.reset_timer();
         }
+
+        self.persist_state();
 
         // If we're the leader, we may need to propose
         if self.state.is_leader() && self.state.step == ViewStep::WaitingForStatus {

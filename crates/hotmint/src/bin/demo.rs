@@ -5,11 +5,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use hotmint::consensus::application::Application;
-use hotmint::consensus::engine::ConsensusEngine;
+use hotmint::consensus::engine::{ConsensusEngine, EngineConfig};
 use hotmint::consensus::network::ChannelNetwork;
 use hotmint::consensus::state::ConsensusState;
 use hotmint::consensus::store::MemoryBlockStore;
-use hotmint::crypto::Ed25519Signer;
+use hotmint::crypto::{Ed25519Signer, Ed25519Verifier};
 use hotmint::prelude::*;
 use tokio::sync::mpsc;
 use tracing::{Level, info};
@@ -125,7 +125,11 @@ async fn main() {
             Box::new(app),
             Box::new(signer),
             rx,
-            None,
+            EngineConfig {
+                verifier: Box::new(Ed25519Verifier),
+                pacemaker: None,
+                persistence: None,
+            },
         );
 
         handles.push(tokio::spawn(async move { engine.run().await }));
