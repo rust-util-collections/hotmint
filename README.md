@@ -227,16 +227,17 @@ Wire up all validators connected via in-memory channels — useful for testing a
 ```rust
 use std::collections::HashMap;
 use tokio::sync::mpsc;
-use hotmint::consensus::engine::ConsensusEngine;
+use hotmint::consensus::engine::{ConsensusEngine, EngineConfig};
 use hotmint::consensus::state::ConsensusState;
 use hotmint::consensus::store::MemoryBlockStore;
 use hotmint::consensus::network::ChannelNetwork;
+use hotmint::crypto::Ed25519Verifier;
 
 // create a message channel for each validator
 let mut receivers = HashMap::new();
 let mut all_senders = HashMap::new();
 for i in 0..NUM_VALIDATORS {
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::channel(8192);
     receivers.insert(ValidatorId(i), rx);
     all_senders.insert(ValidatorId(i), tx);
 }
@@ -260,7 +261,11 @@ for i in 0..NUM_VALIDATORS {
         Box::new(MyApp),
         Box::new(signers[i as usize].clone()),
         rx,
-        None,
+        EngineConfig {
+            verifier: Box::new(Ed25519Verifier),
+            pacemaker: None,
+            persistence: None,
+        },
     );
 
     tokio::spawn(async move { engine.run().await });
@@ -311,7 +316,11 @@ let engine = ConsensusEngine::new(
     Box::new(MyApp),
     Box::new(signer),
     msg_rx,
-    None,
+    EngineConfig {
+        verifier: Box::new(Ed25519Verifier),
+        pacemaker: None,
+        persistence: None,
+    },
 );
 ```
 
@@ -336,12 +345,13 @@ let known_addresses = vec![
     // ...
 ];
 
-let (net_service, network_sink, msg_rx) = NetworkService::create(
-    "/ip4/0.0.0.0/tcp/30000".parse().unwrap(),
-    peer_map,
-    known_addresses,
-    None,
-).unwrap();
+let (net_service, network_sink, msg_rx, sync_req_rx, sync_resp_rx, peer_info_rx, connected_count_rx) =
+    NetworkService::create(
+        "/ip4/0.0.0.0/tcp/30000".parse().unwrap(),
+        peer_map,
+        known_addresses,
+        None,
+    ).unwrap();
 
 // run the network event loop in background
 tokio::spawn(async move { net_service.run().await });
@@ -365,8 +375,8 @@ use hotmint::api::rpc::{RpcServer, RpcState};
 let mempool = Arc::new(Mempool::new(10_000, 1_048_576));
 
 // status channel (updated by your commit handler)
-// tuple: (current_view, last_committed_height, epoch, validator_count)
-let (status_tx, status_rx) = watch::channel((0u64, 0u64, 0u64, 4usize));
+// tuple: (current_view, last_committed_height, epoch, validator_count, connected_peers)
+let (status_tx, status_rx) = watch::channel((0u64, 0u64, 0u64, 4usize, 0usize));
 
 use std::sync::RwLock;
 use hotmint::consensus::engine::SharedBlockStore;
@@ -376,12 +386,15 @@ let store: SharedBlockStore =
     Arc::new(RwLock::new(Box::new(MemoryBlockStore::new())));
 let (_peer_tx, peer_info_rx) = watch::channel(vec![]);
 
+let (_vs_tx, validator_set_rx) = watch::channel(validator_set.clone());
+
 let rpc_state = RpcState {
     validator_id: 0,
     mempool: mempool.clone(),
     status_rx,
     store,
     peer_info_rx,
+    validator_set_rx,
 };
 
 let server = RpcServer::bind("127.0.0.1:26657", rpc_state).await.unwrap();

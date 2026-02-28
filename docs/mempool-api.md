@@ -85,9 +85,9 @@ use hotmint::api::rpc::{RpcServer, RpcState};
 
 let mempool = Arc::new(Mempool::default());
 
-// status channel: (current_view, last_committed_height, epoch, validator_count)
+// status channel: (current_view, last_committed_height, epoch, validator_count, connected_peers)
 // update this from your Application::on_commit handler
-let (status_tx, status_rx) = watch::channel((0u64, 0u64, 0u64, 4usize));
+let (status_tx, status_rx) = watch::channel((0u64, 0u64, 0u64, 4usize, 0usize));
 
 use std::sync::RwLock;
 use hotmint::consensus::engine::SharedBlockStore;
@@ -97,12 +97,15 @@ let store: SharedBlockStore =
     Arc::new(RwLock::new(Box::new(MemoryBlockStore::new())));
 let (_peer_tx, peer_info_rx) = watch::channel(vec![]);
 
+let (_vs_tx, validator_set_rx) = watch::channel(hotmint::prelude::ValidatorSet::new(vec![]));
+
 let rpc_state = RpcState {
     validator_id: 0,
     mempool: mempool.clone(),
     status_rx,
     store,
     peer_info_rx,
+    validator_set_rx,
 };
 
 let server = RpcServer::bind("127.0.0.1:26657", rpc_state).await.unwrap();
@@ -117,7 +120,7 @@ Wire the status channel into your application's commit handler:
 ```rust
 struct MyApp {
     mempool: Arc<Mempool>,
-    status_tx: watch::Sender<(u64, u64, u64, usize)>,
+    status_tx: watch::Sender<(u64, u64, u64, usize, usize)>,
 }
 
 impl Application for MyApp {
@@ -127,6 +130,7 @@ impl Application for MyApp {
             block.height.as_u64(),
             ctx.epoch.as_u64(),
             ctx.validator_set.validator_count(),
+            0, // connected peers (updated separately)
         ));
         Ok(())
     }
@@ -267,7 +271,7 @@ use hotmint::api::rpc::{RpcServer, RpcState};
 
 struct TxCounterApp {
     mempool: Arc<Mempool>,
-    status_tx: watch::Sender<(u64, u64, u64, usize)>,
+    status_tx: watch::Sender<(u64, u64, u64, usize, usize)>,
 }
 
 impl Application for TxCounterApp {
@@ -287,6 +291,7 @@ impl Application for TxCounterApp {
             block.height.as_u64(),
             ctx.epoch.as_u64(),
             ctx.validator_set.validator_count(),
+            0, // connected peers (updated separately)
         ));
         println!(
             "height={} txs={} view={}",
@@ -301,7 +306,7 @@ impl Application for TxCounterApp {
 #[tokio::main]
 async fn main() {
     let mempool = Arc::new(Mempool::default());
-    let (status_tx, status_rx) = watch::channel((0u64, 0u64, 0u64, 4usize));
+    let (status_tx, status_rx) = watch::channel((0u64, 0u64, 0u64, 4usize, 0usize));
 
     use std::sync::RwLock;
     use hotmint::consensus::engine::SharedBlockStore;
@@ -310,6 +315,7 @@ async fn main() {
     let store: SharedBlockStore =
         Arc::new(RwLock::new(Box::new(MemoryBlockStore::new())));
     let (_peer_tx, peer_info_rx) = watch::channel(vec![]);
+    let (_vs_tx, validator_set_rx) = watch::channel(hotmint::prelude::ValidatorSet::new(vec![]));
 
     // start RPC server
     let rpc_state = RpcState {
@@ -318,6 +324,7 @@ async fn main() {
         status_rx,
         store,
         peer_info_rx,
+        validator_set_rx,
     };
     let server = RpcServer::bind("127.0.0.1:26657", rpc_state).await.unwrap();
     println!("RPC listening on {}", server.local_addr());

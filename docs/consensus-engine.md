@@ -13,7 +13,7 @@ pub struct ConsensusEngine {
     signer: Box<dyn Signer>,
     vote_collector: VoteCollector,
     pacemaker: Pacemaker,
-    msg_rx: UnboundedReceiver<(ValidatorId, ConsensusMessage)>,
+    msg_rx: Receiver<(ValidatorId, ConsensusMessage)>,
     status_count: usize,
     current_view_qc: Option<QuorumCertificate>,
 }
@@ -25,7 +25,8 @@ The engine takes ownership of all its dependencies and runs as an infinite async
 
 ```rust
 use std::sync::{Arc, RwLock};
-use hotmint::consensus::engine::{ConsensusEngine, SharedBlockStore};
+use hotmint::consensus::engine::{ConsensusEngine, EngineConfig, SharedBlockStore};
+use hotmint::crypto::Ed25519Verifier;
 use hotmint::consensus::state::ConsensusState;
 
 let store: SharedBlockStore = Arc::new(RwLock::new(Box::new(block_store)));
@@ -36,8 +37,12 @@ let engine = ConsensusEngine::new(
     Box::new(network_sink),   // impl NetworkSink
     Box::new(application),    // impl Application
     Box::new(signer),         // impl Signer
-    msg_rx,                   // UnboundedReceiver<(ValidatorId, ConsensusMessage)>
-    None,                     // Optional<PacemakerConfig>
+    msg_rx,                   // Receiver<(ValidatorId, ConsensusMessage)>
+    EngineConfig {
+        verifier: Box::new(Ed25519Verifier),
+        pacemaker: None,
+        persistence: None,
+    },
 );
 ```
 

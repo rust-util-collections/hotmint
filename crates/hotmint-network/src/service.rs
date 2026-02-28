@@ -100,6 +100,8 @@ pub struct NetworkService {
     sync_req_tx: mpsc::Sender<IncomingSyncRequest>,
     sync_resp_tx: mpsc::Sender<SyncResponse>,
     peer_info_tx: watch::Sender<Vec<PeerStatus>>,
+    connected_count_tx: watch::Sender<usize>,
+    connected_peers: std::collections::HashSet<PeerId>,
 }
 
 impl NetworkService {
@@ -125,6 +127,7 @@ impl NetworkService {
         mpsc::Receiver<IncomingSyncRequest>,
         mpsc::Receiver<SyncResponse>,
         watch::Receiver<Vec<PeerStatus>>,
+        watch::Receiver<usize>,
     )> {
         let (notif_config, notif_handle) = NotifConfigBuilder::new(NOTIF_PROTOCOL.into())
             .with_max_size(MAX_NOTIFICATION_SIZE)
@@ -187,6 +190,8 @@ impl NetworkService {
             cmd_tx: cmd_tx.clone(),
         };
 
+        let (connected_count_tx, connected_count_rx) = watch::channel(0usize);
+
         Ok((
             Self {
                 litep2p,
@@ -199,12 +204,15 @@ impl NetworkService {
                 sync_req_tx,
                 sync_resp_tx,
                 peer_info_tx,
+                connected_count_tx,
+                connected_peers: std::collections::HashSet::new(),
             },
             sink,
             msg_rx,
             sync_req_rx,
             sync_resp_rx,
             peer_info_rx,
+            connected_count_rx,
         ))
     }
 
@@ -262,7 +270,9 @@ impl NetworkService {
                 };
                 match serde_cbor_2::from_slice::<ConsensusMessage>(&notification) {
                     Ok(msg) => {
-                        let _ = self.msg_tx.try_send((sender, msg));
+                        if let Err(e) = self.msg_tx.try_send((sender, msg)) {
+                            warn!("consensus message dropped (notification): {e}");
+                        }
                     }
                     Err(e) => {
                         warn!(error = %e, "failed to decode notification");
@@ -290,7 +300,9 @@ impl NetworkService {
                 };
                 match serde_cbor_2::from_slice::<ConsensusMessage>(&request) {
                     Ok(msg) => {
-                        let _ = self.msg_tx.try_send((sender, msg));
+                        if let Err(e) = self.msg_tx.try_send((sender, msg)) {
+                            warn!("consensus message dropped (reqresp): {e}");
+                        }
                         self.reqresp_handle.send_response(request_id, vec![]);
                     }
                     Err(e) => {
@@ -314,14 +326,19 @@ impl NetworkService {
                 request,
                 ..
             } => {
-                // Forward sync request to the sync responder
+                if !self.peer_map.peer_to_validator.contains_key(&peer) {
+                    warn!(peer = %peer, "dropping sync request from unknown peer");
+                    return;
+                }
                 match serde_cbor_2::from_slice::<SyncRequest>(&request) {
                     Ok(req) => {
-                        let _ = self.sync_req_tx.try_send(IncomingSyncRequest {
+                        if let Err(e) = self.sync_req_tx.try_send(IncomingSyncRequest {
                             request_id,
                             peer,
                             request: req,
-                        });
+                        }) {
+                            warn!("sync request dropped: {e}");
+                        }
                     }
                     Err(e) => {
                         warn!(error = %e, "failed to decode sync request");
@@ -342,7 +359,9 @@ impl NetworkService {
                 // Forward sync response to the sync requester
                 match serde_cbor_2::from_slice::<SyncResponse>(&response) {
                     Ok(resp) => {
-                        let _ = self.sync_resp_tx.try_send(resp);
+                        if let Err(e) = self.sync_resp_tx.try_send(resp) {
+                            warn!("sync response dropped: {e}");
+                        }
                     }
                     Err(e) => {
                         warn!(error = %e, "failed to decode sync response");
@@ -351,9 +370,12 @@ impl NetworkService {
             }
             RequestResponseEvent::RequestFailed { peer, error, .. } => {
                 debug!(peer = %peer, error = ?error, "sync request failed");
-                let _ = self
+                if let Err(e) = self
                     .sync_resp_tx
-                    .try_send(SyncResponse::Error(format!("request failed: {error:?}")));
+                    .try_send(SyncResponse::Error(format!("request failed: {error:?}")))
+                {
+                    warn!("sync error response dropped: {e}");
+                }
             }
         }
     }
@@ -362,9 +384,13 @@ impl NetworkService {
         match event {
             Litep2pEvent::ConnectionEstablished { peer, endpoint } => {
                 info!(peer = %peer, endpoint = ?endpoint, "connection established");
+                self.connected_peers.insert(peer);
+                let _ = self.connected_count_tx.send(self.connected_peers.len());
             }
             Litep2pEvent::ConnectionClosed { peer, .. } => {
                 debug!(peer = %peer, "connection closed");
+                self.connected_peers.remove(&peer);
+                let _ = self.connected_count_tx.send(self.connected_peers.len());
             }
             Litep2pEvent::DialFailure { address, error, .. } => {
                 warn!(address = %address, error = ?error, "dial failed");
@@ -439,40 +465,52 @@ pub struct Litep2pNetworkSink {
 
 impl Litep2pNetworkSink {
     pub fn add_peer(&self, vid: ValidatorId, pid: PeerId, addrs: Vec<Multiaddr>) {
-        let _ = self.cmd_tx.try_send(NetCommand::AddPeer(vid, pid, addrs));
+        if let Err(e) = self.cmd_tx.try_send(NetCommand::AddPeer(vid, pid, addrs)) {
+            warn!("add_peer cmd dropped: {e}");
+        }
     }
 
     pub fn remove_peer(&self, vid: ValidatorId) {
-        let _ = self.cmd_tx.try_send(NetCommand::RemovePeer(vid));
+        if let Err(e) = self.cmd_tx.try_send(NetCommand::RemovePeer(vid)) {
+            warn!("remove_peer cmd dropped: {e}");
+        }
     }
 
     pub fn send_sync_request(&self, peer_id: PeerId, request: &SyncRequest) {
-        if let Ok(bytes) = serde_cbor_2::to_vec(request) {
-            let _ = self
+        if let Ok(bytes) = serde_cbor_2::to_vec(request)
+            && let Err(e) = self
                 .cmd_tx
-                .try_send(NetCommand::SyncRequest(peer_id, bytes));
+                .try_send(NetCommand::SyncRequest(peer_id, bytes))
+        {
+            warn!("sync request cmd dropped: {e}");
         }
     }
 
     pub fn send_sync_response(&self, request_id: RequestId, response: &SyncResponse) {
-        if let Ok(bytes) = serde_cbor_2::to_vec(response) {
-            let _ = self
+        if let Ok(bytes) = serde_cbor_2::to_vec(response)
+            && let Err(e) = self
                 .cmd_tx
-                .try_send(NetCommand::SyncRespond(request_id, bytes));
+                .try_send(NetCommand::SyncRespond(request_id, bytes))
+        {
+            warn!("sync response cmd dropped: {e}");
         }
     }
 }
 
 impl NetworkSink for Litep2pNetworkSink {
     fn broadcast(&self, msg: ConsensusMessage) {
-        if let Ok(bytes) = serde_cbor_2::to_vec(&msg) {
-            let _ = self.cmd_tx.try_send(NetCommand::Broadcast(bytes));
+        if let Ok(bytes) = serde_cbor_2::to_vec(&msg)
+            && let Err(e) = self.cmd_tx.try_send(NetCommand::Broadcast(bytes))
+        {
+            warn!("broadcast cmd dropped: {e}");
         }
     }
 
     fn send_to(&self, target: ValidatorId, msg: ConsensusMessage) {
-        if let Ok(bytes) = serde_cbor_2::to_vec(&msg) {
-            let _ = self.cmd_tx.try_send(NetCommand::SendTo(target, bytes));
+        if let Ok(bytes) = serde_cbor_2::to_vec(&msg)
+            && let Err(e) = self.cmd_tx.try_send(NetCommand::SendTo(target, bytes))
+        {
+            warn!("send_to cmd dropped for {target}: {e}");
         }
     }
 }

@@ -342,7 +342,8 @@ Usage:
 use hotmint::consensus::application::NoopApplication;
 
 use std::sync::{Arc, RwLock};
-use hotmint::consensus::engine::SharedBlockStore;
+use hotmint::consensus::engine::{EngineConfig, SharedBlockStore};
+use hotmint::crypto::Ed25519Verifier;
 
 let shared_store: SharedBlockStore = Arc::new(RwLock::new(Box::new(store)));
 let engine = ConsensusEngine::new(
@@ -352,6 +353,10 @@ let engine = ConsensusEngine::new(
     Box::new(NoopApplication),
     Box::new(signer),
     msg_rx,
-    None,
+    EngineConfig {
+        verifier: Box::new(Ed25519Verifier),
+        pacemaker: None,
+        persistence: None,
+    },
 );
 ```

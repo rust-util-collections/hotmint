@@ -1,5 +1,6 @@
 use ruc::*;
 
+use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
 use crate::application::Application;
@@ -42,8 +43,8 @@ pub struct ConsensusEngine {
     pacemaker: Pacemaker,
     pacemaker_config: PacemakerConfig,
     msg_rx: mpsc::Receiver<(ValidatorId, ConsensusMessage)>,
-    /// Collected status certs from replicas (for leader)
-    status_count: usize,
+    /// Collected unique status cert senders (for leader, per view)
+    status_senders: HashSet<ValidatorId>,
     /// The QC formed in this view's first voting round (used to build DoubleCert)
     current_view_qc: Option<QuorumCertificate>,
     /// Pending epoch transition (set by try_commit, applied in advance_view_to)
@@ -81,7 +82,7 @@ impl ConsensusEngine {
             pacemaker: Pacemaker::with_config(pc.clone()),
             pacemaker_config: pc,
             msg_rx,
-            status_count: 0,
+            status_senders: HashSet::new(),
             current_view_qc: None,
             pending_epoch: None,
             persistence: config.persistence,
@@ -206,6 +207,18 @@ impl ConsensusEngine {
                 if !self.verifier.verify(&vi.public_key, &bytes, signature) {
                     warn!(proposer = %block.proposer, "invalid proposal signature");
                     return false;
+                }
+                // Verify justify QC aggregate signature (skip genesis QC which has no signers)
+                if justify.aggregate_signature.count() > 0 {
+                    let qc_bytes =
+                        Vote::signing_bytes(justify.view, &justify.block_hash, VoteType::Vote);
+                    if !self
+                        .verifier
+                        .verify_aggregate(vs, &qc_bytes, &justify.aggregate_signature)
+                    {
+                        warn!(proposer = %block.proposer, "invalid justify QC aggregate signature");
+                        return false;
+                    }
                 }
                 true
             }
@@ -459,16 +472,16 @@ impl ConsensusEngine {
 
             ConsensusMessage::StatusCert {
                 locked_qc,
-                validator: _,
+                validator,
                 signature: _,
             } => {
                 if self.state.is_leader() && self.state.step == ViewStep::WaitingForStatus {
                     if let Some(ref qc) = locked_qc {
                         self.state.update_highest_qc(qc);
                     }
-                    self.status_count += 1;
+                    self.status_senders.insert(validator);
                     let needed = self.state.validator_set.quorum_threshold() as usize - 1;
-                    if self.status_count >= needed {
+                    if self.status_senders.len() >= needed {
                         self.try_propose();
                     }
                 }
@@ -671,7 +684,7 @@ impl ConsensusEngine {
 
         self.vote_collector.clear_view(self.state.current_view);
         self.pacemaker.clear_view(self.state.current_view);
-        self.status_count = 0;
+        self.status_senders.clear();
         self.current_view_qc = None;
 
         // Epoch transition: apply pending validator set change when we reach the

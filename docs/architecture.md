@@ -191,7 +191,7 @@ Trait objects (`Box<dyn T>`) are used for `BlockStore`, `NetworkSink`, `Applicat
 
 ### Why tokio::mpsc for engine ↔ network communication?
 
-The consensus engine receives messages through a `tokio::mpsc::UnboundedReceiver` rather than directly calling network APIs. This decouples the consensus logic from network implementation details and makes the engine trivially testable with in-memory channels.
+The consensus engine receives messages through a `tokio::mpsc::Receiver` rather than directly calling network APIs. This decouples the consensus logic from network implementation details and makes the engine trivially testable with in-memory channels.
 
 ### Why owned values in BlockStore?
 

@@ -171,13 +171,20 @@ async fn run_node(
         .parse()
         .c(d!("invalid p2p listen address: {}", config.p2p.laddr))?;
 
-    let (network_service, network_sink, msg_rx, sync_req_rx, _sync_resp_rx, peer_info_rx) =
-        NetworkService::create(
-            listen_addr,
-            peer_map,
-            known_addresses,
-            Some(litep2p_keypair),
-        )?;
+    let (
+        network_service,
+        network_sink,
+        msg_rx,
+        sync_req_rx,
+        mut sync_resp_rx,
+        peer_info_rx,
+        connected_count_rx,
+    ) = NetworkService::create(
+        listen_addr,
+        peer_map,
+        known_addresses,
+        Some(litep2p_keypair),
+    )?;
 
     // 8. Create ABCI application client and verify connectivity
     let proxy_path = config
@@ -189,6 +196,11 @@ async fn run_node(
         "ABCI application not reachable at '{}' — start your application first",
         proxy_path
     ))?;
+
+    // Save state for sync (before engine consumes everything)
+    let ipc_client_for_sync = IpcApplicationClient::new(proxy_path);
+    let engine_state_epoch = state.current_epoch.clone();
+    let engine_state_height = state.last_committed_height;
 
     // 9. Wrap with status channel for RPC
     let (status_tx, status_rx) = watch::channel((
@@ -270,6 +282,7 @@ async fn run_node(
         let store = store.clone();
         let sync_status_rx = sync_status_rx;
         let mut sync_req_rx = sync_req_rx;
+        let sync_sink = sync_sink.clone();
         tokio::spawn(async move {
             use hotmint_types::sync::{SyncRequest, SyncResponse};
             while let Some(req) = sync_req_rx.recv().await {
@@ -298,9 +311,86 @@ async fn run_node(
         });
     }
 
+    // 14. Sync catch-up before starting consensus (if peers configured)
+    if !config.p2p.persistent_peers.is_empty() {
+        use hotmint_types::sync::SyncRequest;
+
+        info!("waiting for peer connection before sync...");
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+        let mut count_rx = connected_count_rx;
+        loop {
+            if *count_rx.borrow() > 0 {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                info!("no peers connected within timeout, skipping sync");
+                break;
+            }
+            let _ =
+                tokio::time::timeout(tokio::time::Duration::from_millis(500), count_rx.changed())
+                    .await;
+        }
+
+        if *count_rx.borrow() > 0 {
+            // Find first peer's PeerId for sync requests
+            let first_peer_vid = config
+                .p2p
+                .persistent_peers
+                .first()
+                .and_then(|p| p.split_once('@'))
+                .and_then(|(id, _)| id.parse::<u64>().ok())
+                .map(ValidatorId);
+
+            if let Some(vid) = first_peer_vid {
+                let bridge_sink = sync_sink.clone();
+                let (sync_tx, mut sync_bridge_rx) = tokio::sync::mpsc::channel::<SyncRequest>(16);
+
+                // Look up PeerId from genesis
+                let sync_peer_id =
+                    genesis
+                        .validators
+                        .iter()
+                        .find(|v| v.id == vid.0)
+                        .and_then(|gv| {
+                            let pk = hex::decode(&gv.public_key).ok()?;
+                            let lpk =
+                                litep2p::crypto::ed25519::PublicKey::try_from_bytes(&pk).ok()?;
+                            Some(lpk.to_peer_id())
+                        });
+
+                if let Some(peer_id) = sync_peer_id {
+                    // Bridge task: forward SyncRequest to network
+                    let bridge = tokio::spawn(async move {
+                        while let Some(req) = sync_bridge_rx.recv().await {
+                            bridge_sink.send_sync_request(peer_id, &req);
+                        }
+                    });
+
+                    info!("starting block sync with V{}", vid.0);
+                    let mut sync_store = VsdbBlockStore::new();
+                    let mut sync_epoch = engine_state_epoch.clone();
+                    let mut sync_height = engine_state_height;
+                    if let Err(e) = hotmint::consensus::sync::sync_to_tip(
+                        &mut sync_store,
+                        &ipc_client_for_sync,
+                        &mut sync_epoch,
+                        &mut sync_height,
+                        &sync_tx,
+                        &mut sync_resp_rx,
+                    )
+                    .await
+                    {
+                        info!(%e, "sync completed with error, continuing from current state");
+                    }
+                    bridge.abort();
+                }
+            }
+        }
+    }
+
     info!("consensus engine starting");
 
-    // 14. Run consensus engine (blocks forever)
+    // 15. Run consensus engine (blocks forever)
     engine.run().await;
 
     Ok(())

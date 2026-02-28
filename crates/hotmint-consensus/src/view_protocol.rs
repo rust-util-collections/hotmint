@@ -199,6 +199,16 @@ pub fn on_proposal(
         return Err(eg!("proposal justify rank below locked QC rank"));
     }
 
+    // Verify block hash integrity
+    let expected_hash = hotmint_crypto::hash_block(&block);
+    if block.hash != expected_hash {
+        return Err(eg!(
+            "block hash mismatch: declared {} != computed {}",
+            block.hash,
+            expected_hash
+        ));
+    }
+
     let ctx = BlockContext {
         height: block.height,
         view: block.view,

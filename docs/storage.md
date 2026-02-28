@@ -139,7 +139,8 @@ pub struct VsdbBlockStore {
 
 ```rust
 use std::sync::{Arc, RwLock};
-use hotmint::consensus::engine::SharedBlockStore;
+use hotmint::consensus::engine::{EngineConfig, SharedBlockStore};
+use hotmint::crypto::Ed25519Verifier;
 
 let store: SharedBlockStore =
     Arc::new(RwLock::new(Box::new(VsdbBlockStore::new())));
@@ -151,7 +152,11 @@ let engine = ConsensusEngine::new(
     Box::new(app),
     Box::new(signer),
     msg_rx,
-    None,
+    EngineConfig {
+        verifier: Box::new(Ed25519Verifier),
+        pacemaker: None,
+        persistence: None,
+    },
 );
 ```
 

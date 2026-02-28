@@ -86,15 +86,16 @@ let validator_set = ValidatorSet::new(validator_infos);
 ```rust
 use std::collections::HashMap;
 use tokio::sync::mpsc;
-use hotmint::consensus::engine::ConsensusEngine;
+use hotmint::consensus::engine::{ConsensusEngine, EngineConfig};
 use hotmint::consensus::state::ConsensusState;
 use hotmint::consensus::store::MemoryBlockStore;
 use hotmint::consensus::network::ChannelNetwork;
+use hotmint::crypto::Ed25519Verifier;
 
 let mut receivers = HashMap::new();
 let mut all_senders = HashMap::new();
 for i in 0..N {
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::channel(8192);
     receivers.insert(ValidatorId(i), rx);
     all_senders.insert(ValidatorId(i), tx);
 }
@@ -117,7 +118,11 @@ for i in 0..N {
         Box::new(MyApp),
         Box::new(signers[i as usize].clone()),
         rx,
-        None,
+        EngineConfig {
+            verifier: Box::new(Ed25519Verifier),
+            pacemaker: None,
+            persistence: None,
+        },
     );
 
     tokio::spawn(async move { engine.run().await });

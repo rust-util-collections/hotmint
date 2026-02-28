@@ -226,9 +226,9 @@ The `ConsensusMessage` enum defines all message types exchanged between validato
 pub enum ConsensusMessage {
     // Leader -> All: block proposal with justify QC
     Propose {
-        block: Block,
-        justify: QuorumCertificate,
-        double_cert: Option<DoubleCertificate>,
+        block: Box<Block>,
+        justify: Box<QuorumCertificate>,
+        double_cert: Option<Box<DoubleCertificate>>,
         signature: Signature,
     },
 
