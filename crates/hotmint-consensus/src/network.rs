@@ -1,8 +1,11 @@
-use hotmint_types::{ConsensusMessage, ValidatorId};
+use hotmint_types::{ConsensusMessage, ValidatorId, ValidatorSet};
 
 pub trait NetworkSink: Send + Sync {
     fn broadcast(&self, msg: ConsensusMessage);
     fn send_to(&self, target: ValidatorId, msg: ConsensusMessage);
+    /// Notify the network layer of a validator set change (epoch transition).
+    /// Default is no-op for test stubs.
+    fn on_epoch_change(&self, _new_validator_set: &ValidatorSet) {}
 }
 
 /// Channel-based network stub: routes messages via mpsc senders

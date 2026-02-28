@@ -13,10 +13,39 @@ use hotmint_types::validator::{ValidatorId, ValidatorInfo, ValidatorSet};
 pub struct NodeConfig {
     /// Unix socket path for the ABCI application connection.
     pub proxy_app: String,
+    pub node: NodeModeConfig,
     pub rpc: RpcConfig,
     pub p2p: P2pConfig,
+    pub pex: hotmint_network::pex::PexConfig,
     pub consensus: ConsensusConfig,
     pub mempool: MempoolConfig,
+}
+
+/// Node identity and role configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeModeConfig {
+    /// Node operating mode: "validator" or "fullnode".
+    pub mode: String,
+    /// Whether to relay consensus messages to other peers.
+    pub relay_consensus: bool,
+    /// Whether to relay transactions to other peers.
+    pub relay_transactions: bool,
+    /// Whether to serve RPC queries.
+    pub serve_rpc: bool,
+    /// Whether to respond to block sync requests.
+    pub serve_sync: bool,
+}
+
+impl Default for NodeModeConfig {
+    fn default() -> Self {
+        Self {
+            mode: "validator".into(),
+            relay_consensus: true,
+            relay_transactions: true,
+            serve_rpc: true,
+            serve_sync: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,6 +60,10 @@ pub struct P2pConfig {
     pub laddr: String,
     /// Persistent peers: `"<validator_id>@<multiaddr>"`.
     pub persistent_peers: Vec<String>,
+    /// Maximum number of connected peers.
+    pub max_peers: usize,
+    /// Peer IDs that should not be advertised to other peers (sentry protection).
+    pub private_peer_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,13 +83,17 @@ impl Default for NodeConfig {
     fn default() -> Self {
         Self {
             proxy_app: "unix:///tmp/hotmint/app.sock".into(),
+            node: NodeModeConfig::default(),
             rpc: RpcConfig {
                 laddr: "127.0.0.1:26657".into(),
             },
             p2p: P2pConfig {
                 laddr: "/ip4/0.0.0.0/tcp/26656".into(),
                 persistent_peers: vec![],
+                max_peers: 50,
+                private_peer_ids: vec![],
             },
+            pex: hotmint_network::pex::PexConfig::default(),
             consensus: ConsensusConfig {
                 base_timeout_ms: 2000,
                 max_timeout_ms: 30000,

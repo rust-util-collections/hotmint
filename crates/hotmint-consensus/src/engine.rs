@@ -704,6 +704,8 @@ impl ConsensusEngine {
             );
             self.state.validator_set = new_epoch.validator_set.clone();
             self.state.current_epoch = new_epoch;
+            // Notify network layer of the new validator set
+            self.network.on_epoch_change(&self.state.validator_set);
             // Full clear: old votes/wishes are from the previous epoch's validator set
             self.vote_collector = VoteCollector::new();
             self.pacemaker = Pacemaker::with_config(self.pacemaker_config.clone());
