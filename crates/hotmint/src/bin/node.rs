@@ -179,12 +179,20 @@ async fn run_node(
         mut sync_resp_rx,
         peer_info_rx,
         connected_count_rx,
-    ) = NetworkService::create(
-        listen_addr,
-        peer_map,
-        known_addresses,
-        Some(litep2p_keypair),
-    )?;
+    ) = {
+        let peer_book_path = home.join("data").join("peer_book.json");
+        let peer_book = hotmint::network::peer::PeerBook::load(&peer_book_path)
+            .unwrap_or_else(|_| hotmint::network::peer::PeerBook::new(&peer_book_path));
+        let peer_book = std::sync::Arc::new(std::sync::RwLock::new(peer_book));
+        NetworkService::create(
+            listen_addr,
+            peer_map,
+            known_addresses,
+            Some(litep2p_keypair),
+            peer_book,
+            config.pex.clone(),
+        )?
+    };
 
     // 8. Create ABCI application client and verify connectivity
     let proxy_path = config

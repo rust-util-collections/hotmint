@@ -21,10 +21,17 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, info, warn};
 
+use std::sync::{Arc, RwLock};
+
+use crate::peer::{PeerBook, PeerInfo};
+use crate::pex::{PexConfig, PexRequest, PexResponse};
+
 const NOTIF_PROTOCOL: &str = "/hotmint/consensus/notif/1";
 const REQ_RESP_PROTOCOL: &str = "/hotmint/consensus/reqresp/1";
 const SYNC_PROTOCOL: &str = "/hotmint/sync/1";
+const PEX_PROTOCOL: &str = "/hotmint/pex/1";
 const MAX_NOTIFICATION_SIZE: usize = 16 * 1024 * 1024;
+const MAINTENANCE_INTERVAL_SECS: u64 = 10;
 
 /// Maps ValidatorId <-> PeerId for routing
 #[derive(Clone)]
@@ -94,7 +101,11 @@ pub struct NetworkService {
     notif_handle: NotificationHandle,
     reqresp_handle: RequestResponseHandle,
     sync_handle: RequestResponseHandle,
+    pex_handle: RequestResponseHandle,
     peer_map: PeerMap,
+    peer_book: Arc<RwLock<PeerBook>>,
+    pex_config: PexConfig,
+    persistent_peers: HashMap<ValidatorId, PeerId>,
     msg_tx: mpsc::Sender<(ValidatorId, ConsensusMessage)>,
     cmd_rx: mpsc::Receiver<NetCommand>,
     sync_req_tx: mpsc::Sender<IncomingSyncRequest>,
@@ -120,6 +131,8 @@ impl NetworkService {
         peer_map: PeerMap,
         known_addresses: Vec<(PeerId, Vec<Multiaddr>)>,
         keypair: Option<litep2p::crypto::ed25519::Keypair>,
+        peer_book: Arc<RwLock<PeerBook>>,
+        pex_config: PexConfig,
     ) -> Result<(
         Self,
         Litep2pNetworkSink,
@@ -145,6 +158,10 @@ impl NetworkService {
             .with_max_size(MAX_NOTIFICATION_SIZE)
             .build();
 
+        let (pex_config_proto, pex_handle) = ReqRespConfigBuilder::new(PEX_PROTOCOL.into())
+            .with_max_size(1024 * 1024) // 1MB for peer lists
+            .build();
+
         let mut config_builder = ConfigBuilder::new()
             .with_tcp(TcpConfig {
                 listen_addresses: vec![listen_addr],
@@ -152,7 +169,8 @@ impl NetworkService {
             })
             .with_notification_protocol(notif_config)
             .with_request_response_protocol(reqresp_config)
-            .with_request_response_protocol(sync_config);
+            .with_request_response_protocol(sync_config)
+            .with_request_response_protocol(pex_config_proto);
 
         if let Some(kp) = keypair {
             config_builder = config_builder.with_keypair(kp);
@@ -192,13 +210,20 @@ impl NetworkService {
 
         let (connected_count_tx, connected_count_rx) = watch::channel(0usize);
 
+        // Save persistent peers for auto-reconnect
+        let persistent_peers: HashMap<ValidatorId, PeerId> = peer_map.validator_to_peer.clone();
+
         Ok((
             Self {
                 litep2p,
                 notif_handle,
                 reqresp_handle,
                 sync_handle,
+                pex_handle,
                 peer_map,
+                peer_book,
+                pex_config,
+                persistent_peers,
                 msg_tx,
                 cmd_rx,
                 sync_req_tx,
@@ -222,6 +247,11 @@ impl NetworkService {
 
     /// Run the network event loop
     pub async fn run(mut self) {
+        let mut maintenance_interval =
+            tokio::time::interval(tokio::time::Duration::from_secs(MAINTENANCE_INTERVAL_SECS));
+        let mut pex_interval = tokio::time::interval(tokio::time::Duration::from_secs(
+            self.pex_config.request_interval_secs,
+        ));
         loop {
             tokio::select! {
                 event = self.notif_handle.next() => {
@@ -239,6 +269,11 @@ impl NetworkService {
                         self.handle_sync_event(event);
                     }
                 }
+                event = self.pex_handle.next() => {
+                    if let Some(event) = event {
+                        self.handle_pex_event(event);
+                    }
+                }
                 event = self.litep2p.next_event() => {
                     if let Some(event) = event {
                         self.handle_litep2p_event(event);
@@ -246,6 +281,14 @@ impl NetworkService {
                 }
                 Some(cmd) = self.cmd_rx.recv() => {
                     self.handle_command(cmd).await;
+                }
+                _ = maintenance_interval.tick() => {
+                    self.run_maintenance();
+                }
+                _ = pex_interval.tick() => {
+                    if self.pex_config.enabled {
+                        self.run_pex_round().await;
+                    }
                 }
             }
         }
@@ -380,12 +423,137 @@ impl NetworkService {
         }
     }
 
+    fn handle_pex_event(&mut self, event: RequestResponseEvent) {
+        match event {
+            RequestResponseEvent::RequestReceived {
+                peer,
+                request_id,
+                request,
+                ..
+            } => match serde_cbor_2::from_slice::<PexRequest>(&request) {
+                Ok(PexRequest::GetPeers) => {
+                    let book = self.peer_book.read().unwrap();
+                    let peers: Vec<PeerInfo> = book
+                        .get_random_peers(self.pex_config.max_peers_per_response)
+                        .into_iter()
+                        .filter(|p| p.peer_id != peer.to_string())
+                        .cloned()
+                        .collect();
+                    let resp = PexResponse::Peers(peers);
+                    if let Ok(bytes) = serde_cbor_2::to_vec(&resp) {
+                        self.pex_handle.send_response(request_id, bytes);
+                    }
+                }
+                Ok(PexRequest::Advertise {
+                    role,
+                    validator_id,
+                    addresses,
+                }) => {
+                    let mut info = PeerInfo::new(
+                        peer,
+                        role,
+                        addresses.iter().filter_map(|a| a.parse().ok()).collect(),
+                    );
+                    if let Some(vid) = validator_id {
+                        info = info.with_validator(ValidatorId(vid));
+                    }
+                    self.peer_book.write().unwrap().add_peer(info);
+                    if let Ok(bytes) = serde_cbor_2::to_vec(&PexResponse::Ack) {
+                        self.pex_handle.send_response(request_id, bytes);
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, "failed to decode PEX request");
+                    self.pex_handle.reject_request(request_id);
+                }
+            },
+            RequestResponseEvent::ResponseReceived { response, .. } => {
+                if let Ok(PexResponse::Peers(peers)) = serde_cbor_2::from_slice(&response) {
+                    let mut book = self.peer_book.write().unwrap();
+                    for peer in peers {
+                        if !peer.is_banned() {
+                            book.add_peer(peer);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Periodic connection maintenance: reconnect persistent peers, save peer book.
+    fn run_maintenance(&mut self) {
+        // 1. Reconnect disconnected persistent peers
+        for (&_vid, &pid) in &self.persistent_peers {
+            if !self.connected_peers.contains(&pid)
+                && let Some(info) = self.peer_book.read().unwrap().get(&pid.to_string())
+            {
+                let addrs: Vec<Multiaddr> = info
+                    .addresses
+                    .iter()
+                    .filter_map(|a| a.parse().ok())
+                    .collect();
+                if !addrs.is_empty() {
+                    self.litep2p.add_known_address(pid, addrs.into_iter());
+                }
+            }
+        }
+
+        // 2. Try to connect to peers from book if under target
+        let max = self.pex_config.max_peers;
+        if self.connected_peers.len() < max * 4 / 5 {
+            let book = self.peer_book.read().unwrap();
+            let candidates = book.get_random_peers(5);
+            for peer in candidates {
+                if let Ok(pid) = peer.peer_id.parse::<PeerId>()
+                    && !self.connected_peers.contains(&pid)
+                {
+                    let addrs: Vec<Multiaddr> = peer
+                        .addresses
+                        .iter()
+                        .filter_map(|a| a.parse().ok())
+                        .collect();
+                    if !addrs.is_empty() {
+                        self.litep2p.add_known_address(pid, addrs.into_iter());
+                    }
+                }
+            }
+        }
+
+        // 3. Persist peer book
+        if let Err(e) = self.peer_book.read().unwrap().save() {
+            warn!(%e, "failed to save peer book");
+        }
+    }
+
+    /// Send a PEX GetPeers request to a random connected peer.
+    async fn run_pex_round(&mut self) {
+        if self.connected_peers.is_empty() {
+            return;
+        }
+        // Pick a random connected peer
+        let peers: Vec<PeerId> = self.connected_peers.iter().copied().collect();
+        let idx = rand::random::<usize>() % peers.len();
+        let target = peers[idx];
+
+        if let Ok(bytes) = serde_cbor_2::to_vec(&PexRequest::GetPeers) {
+            let _ = self
+                .pex_handle
+                .send_request(target, bytes, DialOptions::Reject)
+                .await;
+        }
+    }
+
     fn handle_litep2p_event(&mut self, event: Litep2pEvent) {
         match event {
             Litep2pEvent::ConnectionEstablished { peer, endpoint } => {
                 info!(peer = %peer, endpoint = ?endpoint, "connection established");
                 self.connected_peers.insert(peer);
                 let _ = self.connected_count_tx.send(self.connected_peers.len());
+                // Update last_seen in peer book
+                if let Some(info) = self.peer_book.write().unwrap().get_mut(&peer.to_string()) {
+                    info.touch();
+                }
             }
             Litep2pEvent::ConnectionClosed { peer, .. } => {
                 debug!(peer = %peer, "connection closed");
