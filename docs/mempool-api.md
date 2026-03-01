@@ -85,9 +85,9 @@ use hotmint::api::rpc::{RpcServer, RpcState};
 
 let mempool = Arc::new(Mempool::default());
 
-// status channel: (current_view, last_committed_height, epoch, validator_count, connected_peers)
+// status channel: (current_view, last_committed_height, epoch, validator_count, epoch_start_view)
 // update this from your Application::on_commit handler
-let (status_tx, status_rx) = watch::channel((0u64, 0u64, 0u64, 4usize, 0usize));
+let (status_tx, status_rx) = watch::channel((0u64, 0u64, 0u64, 4usize, 0u64));
 
 use std::sync::RwLock;
 use hotmint::consensus::engine::SharedBlockStore;
@@ -306,7 +306,7 @@ impl Application for TxCounterApp {
 #[tokio::main]
 async fn main() {
     let mempool = Arc::new(Mempool::default());
-    let (status_tx, status_rx) = watch::channel((0u64, 0u64, 0u64, 4usize, 0usize));
+    let (status_tx, status_rx) = watch::channel((0u64, 0u64, 0u64, 4usize, 0u64));
 
     use std::sync::RwLock;
     use hotmint::consensus::engine::SharedBlockStore;

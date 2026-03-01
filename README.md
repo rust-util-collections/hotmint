@@ -375,8 +375,8 @@ use hotmint::api::rpc::{RpcServer, RpcState};
 let mempool = Arc::new(Mempool::new(10_000, 1_048_576));
 
 // status channel (updated by your commit handler)
-// tuple: (current_view, last_committed_height, epoch, validator_count, connected_peers)
-let (status_tx, status_rx) = watch::channel((0u64, 0u64, 0u64, 4usize, 0usize));
+// tuple: (current_view, last_committed_height, epoch, validator_count, epoch_start_view)
+let (status_tx, status_rx) = watch::channel((0u64, 0u64, 0u64, 4usize, 0u64));
 
 use std::sync::RwLock;
 use hotmint::consensus::engine::SharedBlockStore;

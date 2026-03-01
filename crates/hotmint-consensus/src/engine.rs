@@ -89,9 +89,20 @@ impl ConsensusEngine {
         }
     }
 
-    /// Bootstrap: enter genesis view and start the event loop
+    /// Bootstrap and start the event loop.
+    /// If persisted state was restored (current_view > 1), skip genesis bootstrap.
     pub async fn run(mut self) {
-        self.enter_genesis_view();
+        if self.state.current_view.as_u64() <= 1 {
+            self.enter_genesis_view();
+        } else {
+            info!(
+                validator = %self.state.validator_id,
+                view = %self.state.current_view,
+                height = %self.state.last_committed_height,
+                "resuming from persisted state"
+            );
+            self.pacemaker.reset_timer();
+        }
 
         loop {
             let deadline = self.pacemaker.sleep_until_deadline();
@@ -189,7 +200,25 @@ impl ConsensusEngine {
 
     /// Verify the cryptographic signature on an inbound consensus message.
     /// Returns false (and logs a warning) if verification fails.
+    /// Messages from past views are skipped (they'll be dropped by handle_message anyway).
     fn verify_message(&self, msg: &ConsensusMessage) -> bool {
+        // Skip verification for messages from past views — these may have been
+        // signed by a previous epoch's validator set and can't be verified with
+        // the current set. They'll be dropped by the view checks anyway.
+        let msg_view = match msg {
+            ConsensusMessage::Propose { block, .. } => Some(block.view),
+            ConsensusMessage::VoteMsg(v) | ConsensusMessage::Vote2Msg(v) => Some(v.view),
+            ConsensusMessage::Prepare { certificate, .. } => Some(certificate.view),
+            ConsensusMessage::Wish { target_view, .. } => Some(*target_view),
+            ConsensusMessage::TimeoutCert(tc) => Some(ViewNumber(tc.view.as_u64() + 1)),
+            ConsensusMessage::StatusCert { .. } => None, // status is always for current view
+        };
+        if let Some(v) = msg_view
+            && v < self.state.current_view
+        {
+            return true; // will be dropped by handler
+        }
+
         let vs = &self.state.validator_set;
         match msg {
             ConsensusMessage::Propose {
@@ -480,8 +509,15 @@ impl ConsensusEngine {
                         self.state.update_highest_qc(qc);
                     }
                     self.status_senders.insert(validator);
-                    let needed = self.state.validator_set.quorum_threshold() as usize - 1;
-                    if self.status_senders.len() >= needed {
+                    let status_power: u64 = self
+                        .status_senders
+                        .iter()
+                        .map(|v| self.state.validator_set.power_of(*v))
+                        .sum();
+                    // Leader's own power counts toward quorum
+                    let total_power =
+                        status_power + self.state.validator_set.power_of(self.state.validator_id);
+                    if total_power >= self.state.validator_set.quorum_threshold() {
                         self.try_propose();
                     }
                 }
@@ -727,9 +763,12 @@ impl ConsensusEngine {
 
         self.persist_state();
 
-        // If we're the leader, we may need to propose
+        // If we're the leader, propose immediately.
+        // Note: in a full implementation, the leader would collect StatusCerts
+        // before proposing (status_senders quorum gate). Currently the immediate
+        // propose path is required for liveness across epoch transitions where
+        // cross-epoch verification complexity can stall status collection.
         if self.state.is_leader() && self.state.step == ViewStep::WaitingForStatus {
-            // In simplified version, leader proposes immediately
             self.try_propose();
         }
     }

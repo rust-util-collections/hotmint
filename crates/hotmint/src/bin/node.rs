@@ -207,8 +207,8 @@ async fn run_node(
 
     // Save state for sync (before engine consumes everything)
     let ipc_client_for_sync = IpcApplicationClient::new(proxy_path);
-    let engine_state_epoch = state.current_epoch.clone();
-    let engine_state_height = state.last_committed_height;
+    let mut engine_state_epoch = state.current_epoch.clone();
+    let mut engine_state_height = state.last_committed_height;
 
     // 9. Wrap with status channel for RPC
     let (status_tx, status_rx) = watch::channel((
@@ -259,29 +259,9 @@ async fn run_node(
 
     info!(rpc_addr = %config.rpc.laddr, "RPC server listening");
 
-    // 12. Create consensus engine
-    let signer = Ed25519Signer::new(signing_key, our_vid);
-    let pacemaker_config = PacemakerConfig {
-        base_timeout_ms: config.consensus.base_timeout_ms,
-        max_timeout_ms: config.consensus.max_timeout_ms,
-        backoff_multiplier: config.consensus.backoff_multiplier,
-    };
     let sync_sink = network_sink.clone();
-    let engine = ConsensusEngine::new(
-        state,
-        store.clone(),
-        Box::new(network_sink),
-        Box::new(app),
-        Box::new(signer),
-        msg_rx,
-        EngineConfig {
-            verifier: Box::new(Ed25519Verifier),
-            pacemaker: Some(pacemaker_config),
-            persistence: Some(Box::new(pcs)),
-        },
-    );
 
-    // 13. Spawn background tasks
+    // 12. Spawn network + RPC before sync (sync needs the network running)
     tokio::spawn(async move { network_service.run().await });
     tokio::spawn(async move { rpc_server.run().await });
 
@@ -376,13 +356,11 @@ async fn run_node(
 
                     info!("starting block sync with V{}", vid.0);
                     let mut sync_store = VsdbBlockStore::new();
-                    let mut sync_epoch = engine_state_epoch.clone();
-                    let mut sync_height = engine_state_height;
                     if let Err(e) = hotmint::consensus::sync::sync_to_tip(
                         &mut sync_store,
                         &ipc_client_for_sync,
-                        &mut sync_epoch,
-                        &mut sync_height,
+                        &mut engine_state_epoch,
+                        &mut engine_state_height,
                         &sync_tx,
                         &mut sync_resp_rx,
                     )
@@ -396,9 +374,35 @@ async fn run_node(
         }
     }
 
+    // 15. Write back synced state and create consensus engine
+    // (Engine is created after sync so it starts with up-to-date state)
+    state.last_committed_height = engine_state_height;
+    state.current_epoch = engine_state_epoch;
+    state.validator_set = state.current_epoch.validator_set.clone();
+
+    let signer = Ed25519Signer::new(signing_key, our_vid);
+    let pacemaker_config = PacemakerConfig {
+        base_timeout_ms: config.consensus.base_timeout_ms,
+        max_timeout_ms: config.consensus.max_timeout_ms,
+        backoff_multiplier: config.consensus.backoff_multiplier,
+    };
+    let engine = ConsensusEngine::new(
+        state,
+        store.clone(),
+        Box::new(network_sink),
+        Box::new(app),
+        Box::new(signer),
+        msg_rx,
+        EngineConfig {
+            verifier: Box::new(Ed25519Verifier),
+            pacemaker: Some(pacemaker_config),
+            persistence: Some(Box::new(pcs)),
+        },
+    );
+
     info!("consensus engine starting");
 
-    // 15. Run consensus engine (blocks forever)
+    // 16. Run consensus engine (blocks forever)
     engine.run().await;
 
     Ok(())
@@ -436,7 +440,7 @@ impl Application for AppWithStatus {
             ctx.height.as_u64(),
             ctx.epoch.as_u64(),
             ctx.validator_set.validator_count(),
-            0, // start_view updated on epoch change; approximation here
+            ctx.view.as_u64(), // best available approximation for epoch start view
         ));
         // Update validator set for RPC
         let vs: Vec<hotmint::api::types::ValidatorInfoResponse> = ctx

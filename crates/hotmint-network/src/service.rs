@@ -370,7 +370,8 @@ impl NetworkService {
                 ..
             } => {
                 if !self.peer_map.peer_to_validator.contains_key(&peer) {
-                    warn!(peer = %peer, "dropping sync request from unknown peer");
+                    warn!(peer = %peer, "rejecting sync request from unknown peer");
+                    self.sync_handle.reject_request(request_id);
                     return;
                 }
                 match serde_cbor_2::from_slice::<SyncRequest>(&request) {
