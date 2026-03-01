@@ -90,6 +90,11 @@ impl VoteCollector {
     pub fn clear_view(&mut self, view: ViewNumber) {
         self.votes.retain(|k, _| k.0 != view);
     }
+
+    /// Remove all votes for views before `min_view` to prevent unbounded growth.
+    pub fn prune_before(&mut self, min_view: ViewNumber) {
+        self.votes.retain(|k, _| k.0 >= min_view);
+    }
 }
 
 #[cfg(test)]

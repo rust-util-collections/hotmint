@@ -454,6 +454,9 @@ impl ConsensusEngine {
                 if vote.vote_type != VoteType::Vote2 {
                     return Ok(());
                 }
+                if vote.view != self.state.current_view {
+                    return Ok(());
+                }
                 let result = self
                     .vote_collector
                     .add_vote(&self.state.validator_set, vote)
@@ -719,6 +722,7 @@ impl ConsensusEngine {
         let is_progress = matches!(&trigger, ViewEntryTrigger::DoubleCert(_));
 
         self.vote_collector.clear_view(self.state.current_view);
+        self.vote_collector.prune_before(self.state.current_view);
         self.pacemaker.clear_view(self.state.current_view);
         self.status_senders.clear();
         self.current_view_qc = None;

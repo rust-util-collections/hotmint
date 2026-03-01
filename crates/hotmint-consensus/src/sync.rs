@@ -9,7 +9,7 @@ use crate::store::BlockStore;
 use hotmint_types::context::BlockContext;
 use hotmint_types::epoch::Epoch;
 use hotmint_types::sync::{MAX_SYNC_BATCH, SyncRequest, SyncResponse};
-use hotmint_types::{Block, Height};
+use hotmint_types::{Block, Height, ViewNumber};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
 use tracing::info;
@@ -138,6 +138,17 @@ pub fn replay_blocks(
             continue;
         }
 
+        // Verify block hash integrity
+        let expected_hash = hotmint_crypto::hash_block(block);
+        if block.hash != expected_hash {
+            return Err(eg!(
+                "sync block hash mismatch at height {}: declared {} != computed {}",
+                block.height.as_u64(),
+                block.hash,
+                expected_hash
+            ));
+        }
+
         // Store the block
         store.put_block(block.clone());
 
@@ -149,6 +160,13 @@ pub fn replay_blocks(
             epoch: current_epoch.number,
             validator_set: &current_epoch.validator_set,
         };
+
+        if !app.validate_block(block, &ctx) {
+            return Err(eg!(
+                "app rejected synced block at height {}",
+                block.height.as_u64()
+            ));
+        }
 
         let txs = commit::decode_payload(&block.payload);
         let response = app
@@ -163,7 +181,9 @@ pub fn replay_blocks(
             let new_vs = current_epoch
                 .validator_set
                 .apply_updates(&response.validator_updates);
-            *current_epoch = Epoch::new(current_epoch.number.next(), block.view, new_vs);
+            // Epoch starts 2 views after the committing block (same as commit.rs)
+            let epoch_start = ViewNumber(block.view.as_u64() + 2);
+            *current_epoch = Epoch::new(current_epoch.number.next(), epoch_start, new_vs);
         }
 
         *last_committed_height = block.height;
@@ -180,15 +200,16 @@ mod tests {
     use hotmint_types::{BlockHash, ValidatorId, ViewNumber};
 
     fn make_block(height: u64, parent: BlockHash) -> Block {
-        let hash = BlockHash([height as u8; 32]);
-        Block {
+        let mut block = Block {
             height: Height(height),
             parent_hash: parent,
             view: ViewNumber(height),
             proposer: ValidatorId(0),
             payload: vec![],
-            hash,
-        }
+            hash: BlockHash::GENESIS, // placeholder
+        };
+        block.hash = hotmint_crypto::hash_block(&block);
+        block
     }
 
     #[test]

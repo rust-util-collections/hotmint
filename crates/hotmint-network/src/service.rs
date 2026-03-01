@@ -521,7 +521,8 @@ impl NetworkService {
             }
         }
 
-        // 3. Persist peer book
+        // 3. Prune stale peers (older than 24 hours) and persist
+        self.peer_book.write().unwrap().prune_stale(86400);
         if let Err(e) = self.peer_book.read().unwrap().save() {
             warn!(%e, "failed to save peer book");
         }

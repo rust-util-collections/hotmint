@@ -153,7 +153,9 @@ async fn run_node(
     if let Some(h) = pcs.load_last_committed_height() {
         state.last_committed_height = h;
     }
-    if let Some(epoch) = pcs.load_current_epoch() {
+    if let Some(mut epoch) = pcs.load_current_epoch() {
+        // rebuild_index is needed because ValidatorSet.index_map is #[serde(skip)]
+        epoch.validator_set.rebuild_index();
         state.validator_set = epoch.validator_set.clone();
         state.current_epoch = epoch;
     }
@@ -287,10 +289,15 @@ async fn run_node(
                         from_height,
                         to_height,
                     } => {
+                        // Clamp range to MAX_SYNC_BATCH to prevent DoS
+                        let clamped =
+                            Height(to_height.as_u64().min(
+                                from_height.as_u64() + hotmint_types::sync::MAX_SYNC_BATCH - 1,
+                            ));
                         let blocks = store
                             .read()
                             .unwrap()
-                            .get_blocks_in_range(from_height, to_height);
+                            .get_blocks_in_range(from_height, clamped);
                         SyncResponse::Blocks(blocks)
                     }
                 };

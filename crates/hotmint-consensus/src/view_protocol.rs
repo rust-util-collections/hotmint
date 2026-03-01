@@ -49,9 +49,8 @@ pub fn enter_view(
     match trigger {
         ViewEntryTrigger::Genesis => {
             if am_leader {
+                // Genesis leader enters WaitingForStatus; engine calls try_propose() directly
                 state.step = ViewStep::WaitingForStatus;
-                // In genesis, leader can propose immediately (no status to wait for)
-                state.step = ViewStep::Proposed; // will be set properly by propose()
             } else {
                 state.step = ViewStep::WaitingForProposal;
             }
@@ -197,6 +196,17 @@ pub fn on_proposal(
             "rejecting proposal: justify rank < locked rank"
         );
         return Err(eg!("proposal justify rank below locked QC rank"));
+    }
+
+    // Verify proposer is the rightful leader for this view
+    let expected_leader = state.validator_set.leader_for_view(block.view).id;
+    if block.proposer != expected_leader {
+        return Err(eg!(
+            "block proposer {} is not leader {} for view {}",
+            block.proposer,
+            expected_leader,
+            block.view
+        ));
     }
 
     // Verify block hash integrity
