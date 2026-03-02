@@ -11,6 +11,7 @@ pub struct BlockContext<'a> {
     pub view: ViewNumber,
     pub proposer: ValidatorId,
     pub epoch: EpochNumber,
+    pub epoch_start_view: ViewNumber,
     pub validator_set: &'a ValidatorSet,
 }
 
@@ -32,6 +33,7 @@ pub struct OwnedBlockContext {
     pub view: ViewNumber,
     pub proposer: ValidatorId,
     pub epoch: EpochNumber,
+    pub epoch_start_view: ViewNumber,
     pub validator_set: ValidatorSet,
 }
 
@@ -42,6 +44,7 @@ impl From<&BlockContext<'_>> for OwnedBlockContext {
             view: ctx.view,
             proposer: ctx.proposer,
             epoch: ctx.epoch,
+            epoch_start_view: ctx.epoch_start_view,
             validator_set: ctx.validator_set.clone(),
         }
     }

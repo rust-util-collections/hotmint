@@ -447,7 +447,7 @@ impl Application for AppWithStatus {
             ctx.height.as_u64(),
             ctx.epoch.as_u64(),
             ctx.validator_set.validator_count(),
-            ctx.view.as_u64(), // best available approximation for epoch start view
+            ctx.epoch_start_view.as_u64(),
         ));
         // Update validator set for RPC
         let vs: Vec<hotmint::api::types::ValidatorInfoResponse> = ctx

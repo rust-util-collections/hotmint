@@ -124,6 +124,7 @@ pub fn propose(
         view: state.current_view,
         proposer: state.validator_id,
         epoch: state.current_epoch.number,
+        epoch_start_view: state.current_epoch.start_view,
         validator_set: &state.validator_set,
     };
 
@@ -224,6 +225,7 @@ pub fn on_proposal(
         view: block.view,
         proposer: block.proposer,
         epoch: state.current_epoch.number,
+        epoch_start_view: state.current_epoch.start_view,
         validator_set: &state.validator_set,
     };
 

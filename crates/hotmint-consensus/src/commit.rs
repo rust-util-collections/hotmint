@@ -83,6 +83,7 @@ pub fn try_commit(
             view: block.view,
             proposer: block.proposer,
             epoch: current_epoch.number,
+            epoch_start_view: current_epoch.start_view,
             validator_set: &current_epoch.validator_set,
         };
 

@@ -71,6 +71,7 @@ fn make_block_context(vs: &ValidatorSet) -> BlockContext<'_> {
         view: ViewNumber(0),
         proposer: ValidatorId(0),
         epoch: EpochNumber(0),
+        epoch_start_view: ViewNumber(0),
         validator_set: vs,
     }
 }
