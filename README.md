@@ -333,24 +333,26 @@ Replace in-memory channels with litep2p for multi-process / multi-machine deploy
 ```rust
 use hotmint::network::service::{NetworkService, PeerMap};
 
-// build the peer map (ValidatorId <-> libp2p PeerId)
+// build the peer map (ValidatorId <-> litep2p PeerId)
 let mut peer_map = PeerMap::new();
 peer_map.insert(ValidatorId(0), peer_id_0);
 peer_map.insert(ValidatorId(1), peer_id_1);
 // ...
 
 let known_addresses = vec![
-    (peer_id_0, vec!["/ip4/10.0.0.1/tcp/30000".parse().unwrap()]),
-    (peer_id_1, vec!["/ip4/10.0.0.2/tcp/30000".parse().unwrap()]),
+    (peer_id_0, vec!["/ip4/10.0.0.1/tcp/26656".parse().unwrap()]),
+    (peer_id_1, vec!["/ip4/10.0.0.2/tcp/26656".parse().unwrap()]),
     // ...
 ];
 
 let (net_service, network_sink, msg_rx, sync_req_rx, sync_resp_rx, peer_info_rx, connected_count_rx) =
     NetworkService::create(
-        "/ip4/0.0.0.0/tcp/30000".parse().unwrap(),
+        "/ip4/0.0.0.0/tcp/26656".parse().unwrap(),
         peer_map,
         known_addresses,
         None,
+        peer_book,
+        pex_config,
     ).unwrap();
 
 // run the network event loop in background
@@ -386,7 +388,7 @@ let store: SharedBlockStore =
     Arc::new(RwLock::new(Box::new(MemoryBlockStore::new())));
 let (_peer_tx, peer_info_rx) = watch::channel(vec![]);
 
-let (_vs_tx, validator_set_rx) = watch::channel(validator_set.clone());
+let (_vs_tx, validator_set_rx): (watch::Sender<Vec<ValidatorInfoResponse>>, _) = watch::channel(vec![]);
 
 let rpc_state = RpcState {
     validator_id: 0,

@@ -7,15 +7,19 @@ The `ConsensusEngine` is the heart of hotmint — an async event loop that drive
 ```rust
 pub struct ConsensusEngine {
     state: ConsensusState,
-    store: Box<dyn BlockStore>,
+    store: SharedBlockStore,
     network: Box<dyn NetworkSink>,
     app: Box<dyn Application>,
     signer: Box<dyn Signer>,
+    verifier: Box<dyn Verifier>,
     vote_collector: VoteCollector,
     pacemaker: Pacemaker,
+    pacemaker_config: PacemakerConfig,
     msg_rx: Receiver<(ValidatorId, ConsensusMessage)>,
-    status_count: usize,
+    status_senders: HashSet<ValidatorId>,
     current_view_qc: Option<QuorumCertificate>,
+    pending_epoch: Option<Epoch>,
+    persistence: Option<Box<dyn StatePersistence>>,
 }
 ```
 
@@ -79,6 +83,7 @@ pub struct ConsensusState {
     pub validator_id: ValidatorId,
     pub validator_set: ValidatorSet,
     pub current_view: ViewNumber,
+    pub current_epoch: Epoch,
     pub role: ViewRole,               // Leader or Replica
     pub step: ViewStep,               // progress within the current view
     pub locked_qc: Option<QuorumCertificate>,

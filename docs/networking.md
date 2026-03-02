@@ -8,6 +8,7 @@ Hotmint provides two `NetworkSink` implementations: in-memory channels for singl
 pub trait NetworkSink: Send + Sync {
     fn broadcast(&self, msg: ConsensusMessage);
     fn send_to(&self, target: ValidatorId, msg: ConsensusMessage);
+    fn on_epoch_change(&self, new_validator_set: &ValidatorSet) {}
 }
 ```
 
@@ -95,13 +96,13 @@ let removed_peer: Option<PeerId> = peer_map.remove(ValidatorId(2));
 ```rust
 use hotmint::network::service::NetworkService;
 
-let listen_addr = "/ip4/0.0.0.0/tcp/30000".parse().unwrap();
+let listen_addr = "/ip4/0.0.0.0/tcp/26656".parse().unwrap();
 
 let known_addresses = vec![
-    (peer_id_0, vec!["/ip4/10.0.0.1/tcp/30000".parse().unwrap()]),
-    (peer_id_1, vec!["/ip4/10.0.0.2/tcp/30000".parse().unwrap()]),
-    (peer_id_2, vec!["/ip4/10.0.0.3/tcp/30000".parse().unwrap()]),
-    (peer_id_3, vec!["/ip4/10.0.0.4/tcp/30000".parse().unwrap()]),
+    (peer_id_0, vec!["/ip4/10.0.0.1/tcp/26656".parse().unwrap()]),
+    (peer_id_1, vec!["/ip4/10.0.0.2/tcp/26656".parse().unwrap()]),
+    (peer_id_2, vec!["/ip4/10.0.0.3/tcp/26656".parse().unwrap()]),
+    (peer_id_3, vec!["/ip4/10.0.0.4/tcp/26656".parse().unwrap()]),
 ];
 
 let (net_service, network_sink, msg_rx, sync_req_rx, sync_resp_rx, peer_info_rx, connected_count_rx) =
@@ -110,10 +111,12 @@ let (net_service, network_sink, msg_rx, sync_req_rx, sync_resp_rx, peer_info_rx,
         peer_map,
         known_addresses,
         None, // Optional<litep2p::crypto::ed25519::Keypair>
+        peer_book,      // PeerBook (persistent peer address store)
+        pex_config,     // PexConfig (peer exchange settings)
     ).unwrap();
 ```
 
-`NetworkService::create` accepts an optional `keypair` parameter (`Option<litep2p::crypto::ed25519::Keypair>`). When `None`, a random keypair is generated.
+`NetworkService::create` takes six parameters: the listen address, peer map, known addresses, an optional `keypair` (`Option<litep2p::crypto::ed25519::Keypair>`, `None` generates a random keypair), a `PeerBook` (persistent peer address store), and a `PexConfig` (peer exchange settings).
 
 It returns seven items:
 1. `net_service: NetworkService` — the service itself, must be `.run()` on a tokio task
@@ -208,7 +211,7 @@ async fn run_validator(
 
     // P2P networking
     let (net_service, network_sink, msg_rx, sync_req_rx, sync_resp_rx, peer_info_rx, connected_count_rx) =
-        NetworkService::create(listen_addr, peer_map, known_addresses, None).unwrap();
+        NetworkService::create(listen_addr, peer_map, known_addresses, None, peer_book, pex_config).unwrap();
     tokio::spawn(async move { net_service.run().await });
 
     // consensus engine
@@ -278,7 +281,7 @@ The `Litep2pNetworkSink` supports adding and removing peers at runtime via `NetC
 network_sink.add_peer(
     ValidatorId(4),
     new_peer_id,
-    vec!["/ip4/10.0.0.5/tcp/30000".parse().unwrap()],
+    vec!["/ip4/10.0.0.5/tcp/26656".parse().unwrap()],
 );
 
 // remove a peer at runtime

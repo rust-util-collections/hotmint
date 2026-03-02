@@ -97,7 +97,7 @@ let store: SharedBlockStore =
     Arc::new(RwLock::new(Box::new(MemoryBlockStore::new())));
 let (_peer_tx, peer_info_rx) = watch::channel(vec![]);
 
-let (_vs_tx, validator_set_rx) = watch::channel(hotmint::prelude::ValidatorSet::new(vec![]));
+let (_vs_tx, validator_set_rx): (watch::Sender<Vec<ValidatorInfoResponse>>, _) = watch::channel(vec![]);
 
 let rpc_state = RpcState {
     validator_id: 0,
@@ -120,7 +120,7 @@ Wire the status channel into your application's commit handler:
 ```rust
 struct MyApp {
     mempool: Arc<Mempool>,
-    status_tx: watch::Sender<(u64, u64, u64, usize, usize)>,
+    status_tx: watch::Sender<(u64, u64, u64, usize, u64)>,
 }
 
 impl Application for MyApp {
@@ -130,7 +130,7 @@ impl Application for MyApp {
             block.height.as_u64(),
             ctx.epoch.as_u64(),
             ctx.validator_set.validator_count(),
-            0, // connected peers (updated separately)
+            0, // epoch_start_view
         ));
         Ok(())
     }
@@ -221,6 +221,51 @@ Response:
 
 The transaction is hex-decoded and added to the mempool. `accepted: false` means the transaction was rejected (duplicate, pool full, or failed `Application::validate_tx`).
 
+#### `get_block`
+
+Returns a committed block by height.
+
+Request:
+```bash
+echo '{"method":"get_block","params":{"height":5},"id":3}' | nc 127.0.0.1 26657
+```
+
+#### `get_block_by_hash`
+
+Returns a committed block by its hash (hex-encoded).
+
+Request:
+```bash
+echo '{"method":"get_block_by_hash","params":{"hash":"abcd1234..."},"id":4}' | nc 127.0.0.1 26657
+```
+
+#### `get_validators`
+
+Returns the current validator set.
+
+Request:
+```bash
+echo '{"method":"get_validators","params":{},"id":5}' | nc 127.0.0.1 26657
+```
+
+#### `get_epoch`
+
+Returns the current epoch number and metadata.
+
+Request:
+```bash
+echo '{"method":"get_epoch","params":{},"id":6}' | nc 127.0.0.1 26657
+```
+
+#### `get_peers`
+
+Returns the list of connected peers and their status.
+
+Request:
+```bash
+echo '{"method":"get_peers","params":{},"id":7}' | nc 127.0.0.1 26657
+```
+
 ### Types
 
 ```rust
@@ -246,6 +291,8 @@ pub struct StatusInfo {
     pub current_view: u64,
     pub last_committed_height: u64,
     pub mempool_size: usize,
+    pub epoch: u64,
+    pub validator_count: usize,
 }
 
 pub struct TxResult {
@@ -271,7 +318,7 @@ use hotmint::api::rpc::{RpcServer, RpcState};
 
 struct TxCounterApp {
     mempool: Arc<Mempool>,
-    status_tx: watch::Sender<(u64, u64, u64, usize, usize)>,
+    status_tx: watch::Sender<(u64, u64, u64, usize, u64)>,
 }
 
 impl Application for TxCounterApp {
@@ -291,7 +338,7 @@ impl Application for TxCounterApp {
             block.height.as_u64(),
             ctx.epoch.as_u64(),
             ctx.validator_set.validator_count(),
-            0, // connected peers (updated separately)
+            0, // epoch_start_view
         ));
         println!(
             "height={} txs={} view={}",
@@ -315,7 +362,7 @@ async fn main() {
     let store: SharedBlockStore =
         Arc::new(RwLock::new(Box::new(MemoryBlockStore::new())));
     let (_peer_tx, peer_info_rx) = watch::channel(vec![]);
-    let (_vs_tx, validator_set_rx) = watch::channel(hotmint::prelude::ValidatorSet::new(vec![]));
+    let (_vs_tx, validator_set_rx): (watch::Sender<Vec<ValidatorInfoResponse>>, _) = watch::channel(vec![]);
 
     // start RPC server
     let rpc_state = RpcState {

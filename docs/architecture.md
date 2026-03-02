@@ -104,9 +104,11 @@ Real P2P networking using litep2p:
 - `Litep2pNetworkSink` — implements `NetworkSink` for production use
 - `PeerMap` — bidirectional `ValidatorId ↔ PeerId` mapping
 
-Uses two sub-protocols:
+Uses four sub-protocols:
 - `/hotmint/consensus/notif/1` — notification protocol for broadcast
 - `/hotmint/consensus/reqresp/1` — request-response protocol for directed messages
+- `/hotmint/sync/1` — request-response protocol for block synchronization
+- `/hotmint/pex/1` — peer exchange protocol for peer discovery
 
 ### hotmint-mempool
 

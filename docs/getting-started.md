@@ -131,6 +131,74 @@ for i in 0..N {
 
 That's it — the cluster is now running consensus. Blocks will be proposed, voted on, and committed via your `on_commit` handler.
 
+## CLI Flags
+
+The `hotmint-node` binary accepts the following flags:
+
+| Flag | Description | Default |
+|:-----|:------------|:--------|
+| `--home <PATH>` | Set the home directory for config and data | `~/.hotmint` |
+| `node --proxy-app <ADDR>` | Unix socket address of the ABCI application | `unix:///tmp/hotmint.sock` |
+| `node --p2p-laddr <ADDR>` | P2P listen address (multiaddr format) | `/ip4/0.0.0.0/tcp/26656` |
+| `node --rpc-laddr <ADDR>` | JSON-RPC listen address | `127.0.0.1:26657` |
+
+Examples:
+
+```bash
+# initialize with a custom home directory
+cargo run --bin hotmint-node -- --home /data/mynode init
+
+# run a node with custom addresses
+cargo run --bin hotmint-node -- --home /data/mynode node \
+    --proxy-app unix:///tmp/myapp.sock \
+    --p2p-laddr /ip4/0.0.0.0/tcp/26656 \
+    --rpc-laddr 0.0.0.0:26657
+```
+
+## Configuration File
+
+The `init` command creates a `config.toml` in the home directory. The full structure:
+
+```toml
+[node]
+# Validator private key (hex-encoded Ed25519 seed)
+validator_key = "..."
+# Logging level: "debug", "info", "warn", "error"
+log_level = "info"
+
+[rpc]
+# JSON-RPC listen address
+laddr = "127.0.0.1:26657"
+
+[p2p]
+# P2P listen address (multiaddr format)
+laddr = "/ip4/0.0.0.0/tcp/26656"
+# List of persistent peer addresses
+persistent_peers = []
+# Optional Ed25519 keypair seed for deterministic PeerId (hex)
+# node_key = "..."
+
+[pex]
+# Enable peer exchange protocol
+enabled = true
+# Interval between PEX requests (seconds)
+interval_secs = 30
+
+[consensus]
+# Base pacemaker timeout (milliseconds)
+base_timeout_ms = 2000
+# Timeout backoff multiplier
+backoff_multiplier = 1.5
+# Maximum timeout (milliseconds)
+max_timeout_ms = 30000
+
+[mempool]
+# Maximum number of pending transactions
+max_size = 10000
+# Maximum transaction size in bytes
+max_tx_bytes = 1048576
+```
+
 ## Next Steps
 
 - [Application](application.md) — full lifecycle: `execute_block`, `on_commit`, `query`
