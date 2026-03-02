@@ -369,12 +369,21 @@ impl ConsensusEngine {
                                 if result.pending_epoch.is_some() {
                                     self.pending_epoch = result.pending_epoch;
                                 }
+                                drop(store);
+                                // Store commit QC for sync protocol + flush
+                                {
+                                    let mut s = self.store.write().unwrap();
+                                    for block in &result.committed_blocks {
+                                        s.put_commit_qc(block.height, result.commit_qc.clone());
+                                    }
+                                    s.flush();
+                                }
                             }
                             Err(e) => {
                                 warn!(error = %e, "try_commit failed during fast-forward");
+                                drop(store);
                             }
                         }
-                        drop(store);
                         self.state.highest_double_cert = Some(dc.clone());
                         self.advance_view_to(block.view, ViewEntryTrigger::DoubleCert(dc.clone()));
                     } else {
@@ -635,9 +644,18 @@ impl ConsensusEngine {
                     if result.pending_epoch.is_some() {
                         self.pending_epoch = result.pending_epoch;
                     }
+                    drop(store);
+                    {
+                        let mut s = self.store.write().unwrap();
+                        for block in &result.committed_blocks {
+                            s.put_commit_qc(block.height, result.commit_qc.clone());
+                        }
+                        s.flush();
+                    }
                 }
                 Err(e) => {
                     warn!(error = %e, "try_commit failed in double cert handler");
+                    drop(store);
                 }
             }
         }

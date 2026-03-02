@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::block::{Block, Height};
+use crate::certificate::QuorumCertificate;
 use crate::epoch::EpochNumber;
 use crate::view::ViewNumber;
 
@@ -22,8 +23,9 @@ pub enum SyncRequest {
 /// Sync response from a node serving blocks
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SyncResponse {
-    /// Requested blocks (may be fewer than requested if range exceeds tip)
-    Blocks(Vec<Block>),
+    /// Requested blocks with their commit QCs (may be fewer than requested).
+    /// Each tuple is (Block, Option<QC>) — QC is None for genesis or if not available.
+    Blocks(Vec<(Block, Option<QuorumCertificate>)>),
     /// Current status of the responding node
     Status {
         last_committed_height: Height,

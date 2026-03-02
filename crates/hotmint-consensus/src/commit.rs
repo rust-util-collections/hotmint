@@ -10,6 +10,8 @@ use tracing::info;
 /// Result of a commit operation
 pub struct CommitResult {
     pub committed_blocks: Vec<Block>,
+    /// The QC that certified the committed block (for sync protocol).
+    pub commit_qc: hotmint_types::QuorumCertificate,
     /// If an epoch transition was triggered by end_block, the new epoch (start_view is placeholder)
     pub pending_epoch: Option<Epoch>,
 }
@@ -50,6 +52,7 @@ pub fn try_commit(
     if commit_block.height <= *last_committed_height {
         return Ok(CommitResult {
             committed_blocks: vec![],
+            commit_qc: double_cert.inner_qc.clone(),
             pending_epoch: None,
         });
     }
@@ -113,6 +116,7 @@ pub fn try_commit(
 
     Ok(CommitResult {
         committed_blocks: to_commit,
+        commit_qc: double_cert.inner_qc.clone(),
         pending_epoch,
     })
 }

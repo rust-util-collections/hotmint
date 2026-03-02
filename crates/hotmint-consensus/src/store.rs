@@ -1,11 +1,21 @@
 use std::collections::{BTreeMap, HashMap};
 
-use hotmint_types::{Block, BlockHash, Height};
+use hotmint_types::{Block, BlockHash, Height, QuorumCertificate};
 
 pub trait BlockStore: Send + Sync {
     fn put_block(&mut self, block: Block);
     fn get_block(&self, hash: &BlockHash) -> Option<Block>;
     fn get_block_by_height(&self, h: Height) -> Option<Block>;
+
+    /// Store the QC that committed a block at the given height.
+    fn put_commit_qc(&mut self, _height: Height, _qc: QuorumCertificate) {}
+    /// Retrieve the commit QC for a block at the given height.
+    fn get_commit_qc(&self, _height: Height) -> Option<QuorumCertificate> {
+        None
+    }
+
+    /// Flush pending writes to durable storage.
+    fn flush(&self) {}
 
     /// Get blocks in [from, to] inclusive. Default iterates one-by-one.
     fn get_blocks_in_range(&self, from: Height, to: Height) -> Vec<Block> {
@@ -30,6 +40,7 @@ pub trait BlockStore: Send + Sync {
 pub struct MemoryBlockStore {
     by_hash: HashMap<BlockHash, Block>,
     by_height: BTreeMap<u64, BlockHash>,
+    commit_qcs: HashMap<u64, QuorumCertificate>,
 }
 
 impl Default for MemoryBlockStore {
@@ -43,6 +54,7 @@ impl MemoryBlockStore {
         let mut store = Self {
             by_hash: HashMap::new(),
             by_height: BTreeMap::new(),
+            commit_qcs: HashMap::new(),
         };
         let genesis = Block::genesis();
         store.put_block(genesis);
@@ -81,6 +93,14 @@ impl BlockStore for MemoryBlockStore {
             .next_back()
             .map(|h| Height(*h))
             .unwrap_or(Height::GENESIS)
+    }
+
+    fn put_commit_qc(&mut self, height: Height, qc: QuorumCertificate) {
+        self.commit_qcs.insert(height.as_u64(), qc);
+    }
+
+    fn get_commit_qc(&self, height: Height) -> Option<QuorumCertificate> {
+        self.commit_qcs.get(&height.as_u64()).cloned()
     }
 }
 

@@ -65,4 +65,8 @@ impl BlockStore for VsdbBlockStore {
             .map(|(h, _)| Height(h))
             .unwrap_or(Height::GENESIS)
     }
+
+    fn flush(&self) {
+        vsdb::vsdb_flush();
+    }
 }

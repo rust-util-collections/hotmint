@@ -294,11 +294,17 @@ async fn run_node(
                             Height(to_height.as_u64().min(
                                 from_height.as_u64() + hotmint_types::sync::MAX_SYNC_BATCH - 1,
                             ));
-                        let blocks = store
-                            .read()
-                            .unwrap()
-                            .get_blocks_in_range(from_height, clamped);
-                        SyncResponse::Blocks(blocks)
+                        let s = store.read().unwrap();
+                        let blocks = s.get_blocks_in_range(from_height, clamped);
+                        let blocks_with_qcs: Vec<_> = blocks
+                            .into_iter()
+                            .map(|b| {
+                                let qc = s.get_commit_qc(b.height);
+                                (b, qc)
+                            })
+                            .collect();
+                        drop(s);
+                        SyncResponse::Blocks(blocks_with_qcs)
                     }
                 };
                 sync_sink.send_sync_response(req.request_id, &resp);

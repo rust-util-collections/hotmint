@@ -116,21 +116,58 @@ pub async fn sync_to_tip(
 /// Replay a batch of blocks: store them and run the application lifecycle.
 /// Validates chain continuity (parent_hash linkage).
 pub fn replay_blocks(
-    blocks: &[Block],
+    blocks: &[(Block, Option<hotmint_types::QuorumCertificate>)],
     store: &mut dyn BlockStore,
     app: &dyn Application,
     current_epoch: &mut Epoch,
     last_committed_height: &mut Height,
 ) -> Result<()> {
-    for (i, block) in blocks.iter().enumerate() {
+    for (i, (block, qc)) in blocks.iter().enumerate() {
         // Validate chain continuity
-        if i > 0 && block.parent_hash != blocks[i - 1].hash {
+        if i > 0 && block.parent_hash != blocks[i - 1].0.hash {
             return Err(eg!(
                 "chain discontinuity at height {}: expected parent {}, got {}",
                 block.height.as_u64(),
-                blocks[i - 1].hash,
+                blocks[i - 1].0.hash,
                 block.parent_hash
             ));
+        }
+
+        // Verify commit QC if present (non-genesis blocks should have one)
+        if let Some(cert) = qc {
+            if cert.block_hash != block.hash {
+                return Err(eg!(
+                    "sync QC block_hash mismatch at height {}: QC={} block={}",
+                    block.height.as_u64(),
+                    cert.block_hash,
+                    block.hash
+                ));
+            }
+            // Verify QC aggregate signature
+            let verifier = hotmint_crypto::Ed25519Verifier;
+            let qc_bytes = hotmint_types::vote::Vote::signing_bytes(
+                cert.view,
+                &cert.block_hash,
+                hotmint_types::vote::VoteType::Vote,
+            );
+            if !hotmint_types::Verifier::verify_aggregate(
+                &verifier,
+                &current_epoch.validator_set,
+                &qc_bytes,
+                &cert.aggregate_signature,
+            ) {
+                return Err(eg!(
+                    "sync QC signature verification failed at height {}",
+                    block.height.as_u64()
+                ));
+            }
+        } else if block.height.as_u64() > 1 {
+            // Non-genesis blocks without QC are suspicious but we accept them
+            // with a warning (backwards compatibility with older sync peers)
+            tracing::warn!(
+                height = block.height.as_u64(),
+                "sync block missing commit QC"
+            );
         }
 
         // Skip already-committed blocks
@@ -229,7 +266,9 @@ mod tests {
         let b2 = make_block(2, b1.hash);
         let b3 = make_block(3, b2.hash);
 
-        replay_blocks(&[b1, b2, b3], &mut store, &app, &mut epoch, &mut height).unwrap();
+        // Pass blocks without QCs (genesis-like, no verification needed)
+        let blocks: Vec<_> = vec![b1, b2, b3].into_iter().map(|b| (b, None)).collect();
+        replay_blocks(&blocks, &mut store, &app, &mut epoch, &mut height).unwrap();
         assert_eq!(height, Height(3));
         assert!(store.get_block_by_height(Height(1)).is_some());
         assert!(store.get_block_by_height(Height(3)).is_some());
@@ -250,6 +289,7 @@ mod tests {
         let b1 = make_block(1, BlockHash::GENESIS);
         let b3 = make_block(3, BlockHash([99u8; 32])); // wrong parent
 
-        assert!(replay_blocks(&[b1, b3], &mut store, &app, &mut epoch, &mut height).is_err());
+        let blocks: Vec<_> = vec![b1, b3].into_iter().map(|b| (b, None)).collect();
+        assert!(replay_blocks(&blocks, &mut store, &app, &mut epoch, &mut height).is_err());
     }
 }
