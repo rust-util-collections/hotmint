@@ -10,6 +10,7 @@ members = [
     "crates/hotmint-mempool",
     "crates/hotmint-api",
     "crates/hotmint-abci",
+    "crates/hotmint-staking",
     "examples/demo",
     "examples/evm-chain",
     "examples/bench-consensus",
@@ -53,3 +54,4 @@ hotmint-network = { version = "0.3.1", path = "crates/hotmint-network" }
 hotmint-mempool = { version = "0.3.1", path = "crates/hotmint-mempool" }
 hotmint-api = { version = "0.3.1", path = "crates/hotmint-api" }
 hotmint-abci = { version = "0.3.1", path = "crates/hotmint-abci" }
+hotmint-staking = { version = "0.3.1", path = "crates/hotmint-staking" }
