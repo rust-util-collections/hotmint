@@ -18,3 +18,4 @@ ruc = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
+hotmint-crypto = { workspace = true }

@@ -1,0 +1,12 @@
+[package]
+name = "bench-ipc"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+hotmint-types = { path = "../../crates/hotmint-types" }
+hotmint-consensus = { path = "../../crates/hotmint-consensus" }
+hotmint-crypto = { path = "../../crates/hotmint-crypto" }
+hotmint-abci = { path = "../../crates/hotmint-abci" }
+tokio = { version = "1", features = ["full"] }

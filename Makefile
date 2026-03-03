@@ -32,21 +32,24 @@ bench:
 	$(CARGO) bench --workspace
 
 bench-e2e:
-	$(CARGO) run --release --bin hotmint-bench-e2e
+	@echo "bench-e2e has been replaced by bench-consensus and bench-evm"
 
 bench-consensus:
-	$(CARGO) run --release --bin bench-consensus
+	$(CARGO) run --release -p bench-consensus
 
 bench-evm:
 	$(CARGO) run --release -p evm-chain-example --bin bench-evm
 
-bench-all: bench-consensus bench-evm
+bench-ipc:
+	$(CARGO) run --release -p bench-ipc
+
+bench-all: bench-consensus bench-evm bench-ipc
 
 run:
 	$(CARGO) run --bin hotmint-node -- node
 
 demo:
-	$(CARGO) run --bin hotmint-demo
+	$(CARGO) run -p hotmint-demo
 
 init:
 	$(CARGO) run --bin hotmint-node -- init

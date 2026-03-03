@@ -10,7 +10,10 @@ members = [
     "crates/hotmint-mempool",
     "crates/hotmint-api",
     "crates/hotmint-abci",
+    "examples/demo",
     "examples/evm-chain",
+    "examples/bench-consensus",
+    "examples/bench-ipc",
 ]
 
 [workspace.package]

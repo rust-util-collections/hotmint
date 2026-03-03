@@ -15,17 +15,6 @@ path = "src/lib.rs"
 name = "hotmint-node"
 path = "src/bin/node.rs"
 
-[[bin]]
-name = "hotmint-demo"
-path = "src/bin/demo.rs"
-
-[[bin]]
-name = "hotmint-bench-e2e"
-path = "src/bin/bench_e2e.rs"
-
-[[bin]]
-name = "bench-consensus"
-path = "src/bin/bench_consensus.rs"
 
 [dependencies]
 hotmint-types = { workspace = true }

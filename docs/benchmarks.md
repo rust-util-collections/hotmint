@@ -11,7 +11,10 @@ make bench-consensus
 # EVM execution benchmark (revm transfers)
 make bench-evm
 
-# Both benchmarks
+# IPC benchmark (Unix domain socket overhead)
+make bench-ipc
+
+# All three benchmarks
 make bench-all
 ```
 
@@ -38,6 +41,18 @@ Each block executes 10 ETH transfer transactions through revm's EVM engine. Each
 | Conservative | 5,000ms | ~1,620 | ~64,700 | ~0.6 | ~647,000 |
 
 **Observation**: EVM execution adds ~15-20% overhead compared to pure consensus. At 10 transfers per block, the system achieves ~60,000+ EVM transactions per second across 4 validators. In a real deployment with network latency, throughput would be lower but the EVM execution overhead itself is minimal.
+
+## IPC (Unix Domain Socket, 1KB payload/block)
+
+Same workload as the consensus benchmark, but each validator communicates with its application logic through a Unix domain socket using the hotmint-abci IPC layer (CBOR length-prefixed framing). This measures the overhead of the out-of-process architecture.
+
+| Config | Timeout | Blocks/sec | ms/block | IPC overhead |
+|:-------|:--------|:-----------|:---------|:-------------|
+| Fast | 500ms | ~1,530 | ~0.7 | ~17% |
+| Normal | 2,000ms | ~1,540 | ~0.6 | ~18% |
+| Conservative | 5,000ms | ~1,540 | ~0.6 | ~16% |
+
+**Observation**: The Unix socket IPC layer adds ~17% overhead compared to in-process direct calls. This is the cost of CBOR serialization + Unix socket round-trip per Application method call. In production deployments where the application is a separate process (possibly written in another language), this overhead is a reasonable trade-off for architectural flexibility.
 
 ## What the Timeout Means
 
