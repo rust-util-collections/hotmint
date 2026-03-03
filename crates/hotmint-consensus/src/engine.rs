@@ -202,16 +202,17 @@ impl ConsensusEngine {
     /// Returns false (and logs a warning) if verification fails.
     /// Messages from past views are skipped (they'll be dropped by handle_message anyway).
     fn verify_message(&self, msg: &ConsensusMessage) -> bool {
-        // Skip verification for messages from past views — these may have been
-        // signed by a previous epoch's validator set and can't be verified with
-        // the current set. They'll be dropped by the view checks anyway.
+        // Skip verification for non-Propose past-view messages — these may have
+        // been signed by a previous epoch's validator set. They'll be dropped by
+        // view checks. Propose messages are always verified because they may still
+        // be stored (for chain continuity in fast-forward).
         let msg_view = match msg {
-            ConsensusMessage::Propose { block, .. } => Some(block.view),
+            ConsensusMessage::Propose { .. } => None, // always verify proposals
             ConsensusMessage::VoteMsg(v) | ConsensusMessage::Vote2Msg(v) => Some(v.view),
             ConsensusMessage::Prepare { certificate, .. } => Some(certificate.view),
             ConsensusMessage::Wish { target_view, .. } => Some(*target_view),
             ConsensusMessage::TimeoutCert(tc) => Some(ViewNumber(tc.view.as_u64() + 1)),
-            ConsensusMessage::StatusCert { .. } => None, // status is always for current view
+            ConsensusMessage::StatusCert { .. } => None,
         };
         if let Some(v) = msg_view
             && v < self.state.current_view
@@ -307,7 +308,10 @@ impl ConsensusEngine {
                 true
             }
             ConsensusMessage::TimeoutCert(tc) => {
-                // Verify the TC's aggregate signature over wish signing bytes
+                // TC aggregate signature: individual wishes bind highest_qc,
+                // but aggregate verification can't split per-validator.
+                // Verify with None (base signing bytes) — individual wish
+                // verification at add_wish provides the full binding.
                 let bytes = crate::pacemaker::wish_signing_bytes(ViewNumber(tc.view.as_u64() + 1));
                 if !self
                     .verifier
@@ -356,6 +360,28 @@ impl ConsensusEngine {
                 // If proposal is from a future view, advance to it first
                 if block.view > self.state.current_view {
                     if let Some(ref dc) = double_cert {
+                        // Validate DoubleCert: inner and outer QC must reference same block,
+                        // and outer QC aggregate signature must be valid
+                        if dc.inner_qc.block_hash != dc.outer_qc.block_hash {
+                            warn!("double cert inner/outer block_hash mismatch");
+                            return Ok(());
+                        }
+                        let dc_bytes = Vote::signing_bytes(
+                            dc.outer_qc.view,
+                            &dc.outer_qc.block_hash,
+                            VoteType::Vote2,
+                        );
+                        if dc.outer_qc.aggregate_signature.count() > 0
+                            && !self.verifier.verify_aggregate(
+                                &self.state.validator_set,
+                                &dc_bytes,
+                                &dc.outer_qc.aggregate_signature,
+                            )
+                        {
+                            warn!("double cert outer QC signature invalid");
+                            return Ok(());
+                        }
+
                         // Fast-forward via double cert
                         let store = self.store.read().unwrap();
                         match try_commit(
@@ -396,8 +422,12 @@ impl ConsensusEngine {
                     // earlier proposal. Without this, chain commits that walk
                     // the parent chain would fail with "block not found".
                     if block.height > self.state.last_committed_height {
-                        let mut store = self.store.write().unwrap();
-                        store.put_block(block);
+                        // Verify block hash before storing past-view blocks
+                        let expected = hotmint_crypto::hash_block(&block);
+                        if block.hash == expected {
+                            let mut store = self.store.write().unwrap();
+                            store.put_block(block);
+                        }
                     }
                     return Ok(());
                 }
@@ -482,6 +512,21 @@ impl ConsensusEngine {
                 highest_qc,
                 signature,
             } => {
+                // Validate carried highest_qc (C4 mitigation)
+                if let Some(ref qc) = highest_qc
+                    && qc.aggregate_signature.count() > 0
+                {
+                    let qc_bytes = Vote::signing_bytes(qc.view, &qc.block_hash, VoteType::Vote);
+                    if !self.verifier.verify_aggregate(
+                        &self.state.validator_set,
+                        &qc_bytes,
+                        &qc.aggregate_signature,
+                    ) {
+                        warn!(validator = %validator, "wish carries invalid highest_qc");
+                        return Ok(());
+                    }
+                }
+
                 if let Some(tc) = self.pacemaker.add_wish(
                     &self.state.validator_set,
                     target_view,

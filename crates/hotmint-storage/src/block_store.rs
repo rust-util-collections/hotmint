@@ -1,5 +1,5 @@
 use hotmint_consensus::store::BlockStore;
-use hotmint_types::{Block, BlockHash, Height};
+use hotmint_types::{Block, BlockHash, Height, QuorumCertificate};
 use tracing::debug;
 use vsdb::MapxOrd;
 
@@ -7,6 +7,7 @@ use vsdb::MapxOrd;
 pub struct VsdbBlockStore {
     by_hash: MapxOrd<[u8; 32], Block>,
     by_height: MapxOrd<u64, [u8; 32]>,
+    commit_qcs: MapxOrd<u64, QuorumCertificate>,
 }
 
 impl VsdbBlockStore {
@@ -14,6 +15,7 @@ impl VsdbBlockStore {
         let mut store = Self {
             by_hash: MapxOrd::new(),
             by_height: MapxOrd::new(),
+            commit_qcs: MapxOrd::new(),
         };
         let genesis = Block::genesis();
         store.put_block(genesis);
@@ -64,6 +66,14 @@ impl BlockStore for VsdbBlockStore {
             .last()
             .map(|(h, _)| Height(h))
             .unwrap_or(Height::GENESIS)
+    }
+
+    fn put_commit_qc(&mut self, height: Height, qc: QuorumCertificate) {
+        self.commit_qcs.insert(&height.as_u64(), &qc);
+    }
+
+    fn get_commit_qc(&self, height: Height) -> Option<QuorumCertificate> {
+        self.commit_qcs.get(&height.as_u64())
     }
 
     fn flush(&self) {
