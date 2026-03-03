@@ -1,6 +1,3 @@
-mod app;
-mod tx;
-
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -14,7 +11,7 @@ use hotmint_types::*;
 use tokio::sync::mpsc;
 use tracing::{Level, info};
 
-use app::EvmApp;
+use evm_chain::app::EvmApp;
 
 const NUM_VALIDATORS: u64 = 4;
 
@@ -29,10 +26,10 @@ async fn main() {
     info!("Starting {} validator EVM chain", NUM_VALIDATORS);
     info!(
         "Genesis: Alice (0x{:02x}{:02x}...) = 100 ETH, Bob (0x{:02x}{:02x}...) = 100 ETH",
-        app::ALICE[0],
-        app::ALICE[1],
-        app::BOB[0],
-        app::BOB[1],
+        evm_chain::app::ALICE[0],
+        evm_chain::app::ALICE[1],
+        evm_chain::app::BOB[0],
+        evm_chain::app::BOB[1],
     );
     info!("Each block: Alice sends 1 ETH to Bob\n");
 

@@ -23,6 +23,10 @@ path = "src/bin/demo.rs"
 name = "hotmint-bench-e2e"
 path = "src/bin/bench_e2e.rs"
 
+[[bin]]
+name = "bench-consensus"
+path = "src/bin/bench_consensus.rs"
+
 [dependencies]
 hotmint-types = { workspace = true }
 hotmint-crypto = { workspace = true }

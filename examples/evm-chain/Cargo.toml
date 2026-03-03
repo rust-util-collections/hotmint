@@ -4,6 +4,18 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[lib]
+name = "evm_chain"
+path = "src/lib.rs"
+
+[[bin]]
+name = "evm-chain-example"
+path = "src/main.rs"
+
+[[bin]]
+name = "bench-evm"
+path = "src/bench.rs"
+
 [dependencies]
 hotmint-types = { path = "../../crates/hotmint-types" }
 hotmint-consensus = { path = "../../crates/hotmint-consensus" }

@@ -12,7 +12,7 @@ CRATES := \
 	hotmint-api \
 	hotmint
 
-.PHONY: all fmt lint build test bench bench-e2e run clean check doc update publish
+.PHONY: all fmt lint build test bench bench-e2e bench-consensus bench-evm bench-all run clean check doc update publish
 
 all: fmt lint build test
 
@@ -33,6 +33,14 @@ bench:
 
 bench-e2e:
 	$(CARGO) run --release --bin hotmint-bench-e2e
+
+bench-consensus:
+	$(CARGO) run --release --bin bench-consensus
+
+bench-evm:
+	$(CARGO) run --release -p evm-chain-example --bin bench-evm
+
+bench-all: bench-consensus bench-evm
 
 run:
 	$(CARGO) run --bin hotmint-node -- node
