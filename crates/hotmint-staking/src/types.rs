@@ -23,7 +23,7 @@ pub struct ValidatorState {
 impl ValidatorState {
     /// Total stake = self-bonded + delegated.
     pub fn total_stake(&self) -> u64 {
-        self.self_stake + self.delegated_stake
+        self.self_stake.saturating_add(self.delegated_stake)
     }
 
     /// Voting power: total stake if not jailed, 0 otherwise.

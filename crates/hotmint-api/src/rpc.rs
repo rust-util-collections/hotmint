@@ -73,7 +73,7 @@ impl RpcServer {
                     tokio::spawn(async move {
                         let _permit = permit;
                         let (reader, mut writer) = stream.into_split();
-                        let mut lines = BufReader::new(reader).lines();
+                        let mut lines = BufReader::with_capacity(65_536, reader).lines();
                         while let Ok(Some(line)) = timeout(RPC_READ_TIMEOUT, lines.next_line())
                             .await
                             .unwrap_or(Ok(None))

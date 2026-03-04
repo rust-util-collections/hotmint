@@ -19,7 +19,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.1"
+version = "0.4.0"
 edition = "2024"
 license = "GPL-3.0-only"
 repository = "https://github.com/rust-util-collections/hotmint"
@@ -47,12 +47,12 @@ toml = "0.8"
 dirs = "6"
 hex = "0.4"
 
-hotmint-types = { version = "0.3.1", path = "crates/hotmint-types" }
-hotmint-crypto = { version = "0.3.1", path = "crates/hotmint-crypto" }
-hotmint-consensus = { version = "0.3.1", path = "crates/hotmint-consensus" }
-hotmint-storage = { version = "0.3.1", path = "crates/hotmint-storage" }
-hotmint-network = { version = "0.3.1", path = "crates/hotmint-network" }
-hotmint-mempool = { version = "0.3.1", path = "crates/hotmint-mempool" }
-hotmint-api = { version = "0.3.1", path = "crates/hotmint-api" }
-hotmint-abci = { version = "0.3.1", path = "crates/hotmint-abci" }
-hotmint-staking = { version = "0.3.1", path = "crates/hotmint-staking" }
+hotmint-types = { version = "0.4.0", path = "crates/hotmint-types" }
+hotmint-crypto = { version = "0.4.0", path = "crates/hotmint-crypto" }
+hotmint-consensus = { version = "0.4.0", path = "crates/hotmint-consensus" }
+hotmint-storage = { version = "0.4.0", path = "crates/hotmint-storage" }
+hotmint-network = { version = "0.4.0", path = "crates/hotmint-network" }
+hotmint-mempool = { version = "0.4.0", path = "crates/hotmint-mempool" }
+hotmint-api = { version = "0.4.0", path = "crates/hotmint-api" }
+hotmint-abci = { version = "0.4.0", path = "crates/hotmint-abci" }
+hotmint-staking = { version = "0.4.0", path = "crates/hotmint-staking" }

@@ -75,6 +75,9 @@ impl<S: StakingStore> StakingManager<S> {
             .store
             .get_validator(id)
             .ok_or_else(|| eg!("validator {} not found", id))?;
+        if state.jailed {
+            return Err(eg!("cannot unregister validator {} while jailed", id));
+        }
         let total = state.total_stake();
         // Remove all delegation entries
         let stakers = self.store.stakers_of(id);
@@ -177,7 +180,7 @@ impl<S: StakingStore> StakingManager<S> {
         vs.self_stake = vs.self_stake.saturating_sub(self_slash);
         vs.delegated_stake = vs.delegated_stake.saturating_sub(del_slash);
         vs.jailed = true;
-        vs.jail_until_height = current_height + self.config.jail_duration;
+        vs.jail_until_height = current_height.saturating_add(self.config.jail_duration);
         vs.score = vs.score.saturating_sub(self.config.max_score / 10);
 
         // Proportionally reduce each staker's delegation
@@ -261,7 +264,10 @@ impl<S: StakingStore> StakingManager<S> {
             .store
             .get_validator(proposer)
             .ok_or_else(|| eg!("proposer {} not found", proposer))?;
-        vs.self_stake += reward;
+        vs.self_stake = vs
+            .self_stake
+            .checked_add(reward)
+            .ok_or_else(|| eg!("stake overflow on reward"))?;
         self.store.set_validator(proposer, vs);
         Ok(reward)
     }
@@ -285,7 +291,7 @@ impl<S: StakingStore> StakingManager<S> {
             .into_iter()
             .filter_map(|id| self.store.get_validator(id))
             .map(|vs| vs.total_stake())
-            .sum()
+            .fold(0u64, u64::saturating_add)
     }
 
     /// Return the top `max_validators` validators sorted by voting power (descending).
@@ -296,7 +302,7 @@ impl<S: StakingStore> StakingManager<S> {
             .all_validator_ids()
             .into_iter()
             .filter_map(|id| self.store.get_validator(id))
-            .filter(|vs| !vs.jailed && vs.total_stake() >= self.config.min_self_stake)
+            .filter(|vs| !vs.jailed && vs.self_stake >= self.config.min_self_stake)
             .collect();
         active.sort_by_key(|v| std::cmp::Reverse(v.voting_power()));
         active.truncate(self.config.max_validators);

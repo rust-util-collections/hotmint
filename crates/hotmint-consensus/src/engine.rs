@@ -360,24 +360,47 @@ impl ConsensusEngine {
                 // If proposal is from a future view, advance to it first
                 if block.view > self.state.current_view {
                     if let Some(ref dc) = double_cert {
-                        // Validate DoubleCert: inner and outer QC must reference same block,
-                        // and outer QC aggregate signature must be valid
+                        // Validate DoubleCert comprehensively:
+                        // 1. Inner and outer QC must reference same block
                         if dc.inner_qc.block_hash != dc.outer_qc.block_hash {
                             warn!("double cert inner/outer block_hash mismatch");
                             return Ok(());
                         }
-                        let dc_bytes = Vote::signing_bytes(
+                        // 2. Both QCs must have quorum-level signer count
+                        let quorum = self.state.validator_set.quorum_threshold() as usize;
+                        if dc.inner_qc.aggregate_signature.count() < quorum {
+                            warn!("double cert inner QC insufficient signers");
+                            return Ok(());
+                        }
+                        if dc.outer_qc.aggregate_signature.count() < quorum {
+                            warn!("double cert outer QC insufficient signers");
+                            return Ok(());
+                        }
+                        // 3. Verify inner QC aggregate signature (Vote1)
+                        let inner_bytes = Vote::signing_bytes(
+                            dc.inner_qc.view,
+                            &dc.inner_qc.block_hash,
+                            VoteType::Vote,
+                        );
+                        if !self.verifier.verify_aggregate(
+                            &self.state.validator_set,
+                            &inner_bytes,
+                            &dc.inner_qc.aggregate_signature,
+                        ) {
+                            warn!("double cert inner QC signature invalid");
+                            return Ok(());
+                        }
+                        // 4. Verify outer QC aggregate signature (Vote2)
+                        let outer_bytes = Vote::signing_bytes(
                             dc.outer_qc.view,
                             &dc.outer_qc.block_hash,
                             VoteType::Vote2,
                         );
-                        if dc.outer_qc.aggregate_signature.count() > 0
-                            && !self.verifier.verify_aggregate(
-                                &self.state.validator_set,
-                                &dc_bytes,
-                                &dc.outer_qc.aggregate_signature,
-                            )
-                        {
+                        if !self.verifier.verify_aggregate(
+                            &self.state.validator_set,
+                            &outer_bytes,
+                            &dc.outer_qc.aggregate_signature,
+                        ) {
                             warn!("double cert outer QC signature invalid");
                             return Ok(());
                         }

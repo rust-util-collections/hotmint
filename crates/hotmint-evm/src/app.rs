@@ -118,7 +118,7 @@ impl EvmApplication {
 
     /// Query an account's balance.
     pub fn get_balance(&self, addr: &[u8; 20]) -> U256 {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         db.cache
             .accounts
             .get(&Address::new(*addr))
@@ -128,7 +128,7 @@ impl EvmApplication {
 
     /// Query an account's nonce.
     pub fn get_nonce(&self, addr: &[u8; 20]) -> u64 {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         db.cache
             .accounts
             .get(&Address::new(*addr))
@@ -139,12 +139,25 @@ impl EvmApplication {
 
 impl Application for EvmApplication {
     fn execute_block(&self, txs: &[&[u8]], ctx: &BlockContext) -> Result<EndBlockResponse> {
-        let mut db = self.db.lock().unwrap();
+        let mut db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let mut gas_used: u64 = 0;
 
         for tx_bytes in txs {
             let Some(tx) = EvmTx::decode(tx_bytes) else {
                 continue;
             };
+
+            // Enforce block gas limit
+            if gas_used.saturating_add(tx.gas_limit) > self.config.block_gas_limit {
+                warn!(
+                    height = ctx.height.as_u64(),
+                    gas_used,
+                    tx_gas = tx.gas_limit,
+                    limit = self.config.block_gas_limit,
+                    "block gas limit exceeded, skipping remaining txs"
+                );
+                break;
+            }
 
             let tx_env = TxEnv {
                 caller: Address::new(tx.from),
@@ -158,12 +171,17 @@ impl Application for EvmApplication {
 
             let mut evm = Context::mainnet().with_db(&mut *db).build_mainnet();
 
-            if let Err(e) = evm.transact_commit(tx_env) {
-                warn!(
-                    height = ctx.height.as_u64(),
-                    error = ?e,
-                    "EVM tx execution failed"
-                );
+            match evm.transact_commit(tx_env) {
+                Ok(_) => {
+                    gas_used = gas_used.saturating_add(tx.gas_limit);
+                }
+                Err(e) => {
+                    warn!(
+                        height = ctx.height.as_u64(),
+                        error = ?e,
+                        "EVM tx execution failed"
+                    );
+                }
             }
         }
 

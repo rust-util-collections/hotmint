@@ -1,3 +1,12 @@
+//! # hotmint-evm
+//!
+//! EVM execution toolkit for building EVM-compatible chains on hotmint.
+//!
+//! **WARNING: This crate uses simplified unsigned transactions (no ECDSA
+//! signature verification). It is intended for development, testing, and
+//! demos. Production EVM chains MUST add transaction signature verification
+//! (e.g., secp256k1 ECDSA recovery) before deployment.**
+
 mod app;
 mod tx;
 

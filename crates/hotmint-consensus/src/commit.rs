@@ -37,6 +37,11 @@ pub fn decode_payload(payload: &[u8]) -> Vec<&[u8]> {
 ///
 /// For each committed block, runs the full application lifecycle:
 /// begin_block → deliver_tx (×N) → end_block → on_commit
+///
+/// # Safety
+/// Caller MUST verify both inner_qc and outer_qc aggregate signatures
+/// and quorum counts before calling this function. This function trusts
+/// the DoubleCertificate completely and performs no cryptographic checks.
 pub fn try_commit(
     double_cert: &DoubleCertificate,
     store: &dyn BlockStore,

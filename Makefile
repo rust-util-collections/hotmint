@@ -7,6 +7,7 @@ CRATES := \
 	hotmint-crypto \
 	hotmint-consensus \
 	hotmint-abci \
+	hotmint-staking \
 	hotmint-network \
 	hotmint-storage \
 	hotmint-api \

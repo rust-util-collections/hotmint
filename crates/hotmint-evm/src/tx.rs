@@ -47,7 +47,7 @@ impl EvmTx {
     }
 
     pub fn encode(&self) -> Vec<u8> {
-        serde_cbor_2::to_vec(self).expect("tx serialization")
+        serde_cbor_2::to_vec(self).unwrap_or_default()
     }
 
     pub fn decode(bytes: &[u8]) -> Option<Self> {
