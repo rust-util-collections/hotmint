@@ -1,8 +1,9 @@
 [package]
 name = "hotmint-evm"
-description = "EVM execution toolkit for building EVM-compatible chains on Hotmint"
+description = "EVM execution example/toolkit for building EVM-compatible chains on Hotmint (demo only, not for production)"
 version.workspace = true
 edition.workspace = true
+publish = false
 license.workspace = true
 repository.workspace = true
 keywords.workspace = true
