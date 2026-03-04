@@ -11,6 +11,7 @@ members = [
     "crates/hotmint-api",
     "crates/hotmint-abci",
     "crates/hotmint-staking",
+    "crates/hotmint-evm",
     "examples/demo",
     "examples/evm-chain",
     "examples/bench-consensus",

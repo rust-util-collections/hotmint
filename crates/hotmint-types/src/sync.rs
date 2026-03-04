@@ -24,7 +24,7 @@ pub enum SyncRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SyncResponse {
     /// Requested blocks with their commit QCs (may be fewer than requested).
-    /// Each tuple is (Block, Option<QC>) — QC is None for genesis or if not available.
+    /// Each tuple is `(Block, Option<QC>)` — QC is None for genesis or if not available.
     Blocks(Vec<(Block, Option<QuorumCertificate>)>),
     /// Current status of the responding node
     Status {

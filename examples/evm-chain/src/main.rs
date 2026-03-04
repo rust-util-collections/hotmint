@@ -11,7 +11,7 @@ use hotmint_types::*;
 use tokio::sync::mpsc;
 use tracing::{Level, info};
 
-use evm_chain::app::EvmApp;
+use evm_chain::app::DemoEvmApp;
 
 const NUM_VALIDATORS: u64 = 4;
 
@@ -83,7 +83,7 @@ async fn main() {
         let store: Arc<RwLock<Box<dyn hotmint_consensus::store::BlockStore>>> =
             Arc::new(RwLock::new(Box::new(MemoryBlockStore::new())));
 
-        let app = EvmApp::new(vid);
+        let app = DemoEvmApp::new();
         let state = ConsensusState::new(vid, validator_set.clone());
 
         let engine = ConsensusEngine::new(

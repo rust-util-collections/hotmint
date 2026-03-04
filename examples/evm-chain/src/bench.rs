@@ -18,7 +18,7 @@ use hotmint_types::*;
 use tokio::sync::mpsc;
 
 use evm_chain::app::{ALICE, BOB};
-use evm_chain::tx::{self, EvmTx};
+use hotmint_evm::{self as tx, EvmTx};
 
 use revm::context::TxEnv;
 use revm::database::CacheDB;

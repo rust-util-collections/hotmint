@@ -20,6 +20,7 @@ path = "src/bench.rs"
 hotmint-types = { path = "../../crates/hotmint-types" }
 hotmint-consensus = { path = "../../crates/hotmint-consensus" }
 hotmint-crypto = { path = "../../crates/hotmint-crypto" }
+hotmint-evm = { path = "../../crates/hotmint-evm" }
 
 revm = { version = "36", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
