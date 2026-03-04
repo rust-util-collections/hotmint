@@ -32,12 +32,13 @@ impl Mempool {
 
         let hash = Self::hash_tx(&tx);
 
+        // Lock order: txs first, then seen (same as collect_payload)
+        let mut txs = self.txs.lock().await;
         let mut seen = self.seen.lock().await;
+
         if seen.contains(&hash) {
             return false;
         }
-
-        let mut txs = self.txs.lock().await;
         if txs.len() >= self.max_size {
             debug!(size = txs.len(), max = self.max_size, "mempool full");
             return false;

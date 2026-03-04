@@ -62,9 +62,16 @@ fn write_frame_sync(w: &mut impl Write, payload: &[u8]) -> std::io::Result<()> {
 }
 
 fn read_frame_sync(r: &mut impl Read) -> std::io::Result<Vec<u8>> {
+    const MAX_FRAME: usize = 64 * 1024 * 1024;
     let mut len_buf = [0u8; 4];
     r.read_exact(&mut len_buf)?;
     let len = u32::from_le_bytes(len_buf) as usize;
+    if len > MAX_FRAME {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("frame size {len} exceeds max {MAX_FRAME}"),
+        ));
+    }
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf)?;
     Ok(buf)

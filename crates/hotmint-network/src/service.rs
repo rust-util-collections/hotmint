@@ -86,6 +86,8 @@ pub enum NetCommand {
     SyncRequest(PeerId, Vec<u8>),
     /// Respond to a sync request
     SyncRespond(RequestId, Vec<u8>),
+    /// Update peer_map from new validator set (epoch transition)
+    EpochChange(Vec<(ValidatorId, hotmint_types::crypto::PublicKey)>),
 }
 
 /// Incoming sync request forwarded to the sync responder
@@ -431,43 +433,70 @@ impl NetworkService {
                 request_id,
                 request,
                 ..
-            } => match serde_cbor_2::from_slice::<PexRequest>(&request) {
-                Ok(PexRequest::GetPeers) => {
-                    let book = self.peer_book.read().unwrap();
-                    let peers: Vec<PeerInfo> = book
-                        .get_random_peers(self.pex_config.max_peers_per_response)
-                        .into_iter()
-                        .filter(|p| p.peer_id != peer.to_string())
-                        .cloned()
-                        .collect();
-                    let resp = PexResponse::Peers(peers);
-                    if let Ok(bytes) = serde_cbor_2::to_vec(&resp) {
-                        self.pex_handle.send_response(request_id, bytes);
-                    }
-                }
-                Ok(PexRequest::Advertise {
-                    role,
-                    validator_id,
-                    addresses,
-                }) => {
-                    let mut info = PeerInfo::new(
-                        peer,
-                        role,
-                        addresses.iter().filter_map(|a| a.parse().ok()).collect(),
-                    );
-                    if let Some(vid) = validator_id {
-                        info = info.with_validator(ValidatorId(vid));
-                    }
-                    self.peer_book.write().unwrap().add_peer(info);
-                    if let Ok(bytes) = serde_cbor_2::to_vec(&PexResponse::Ack) {
-                        self.pex_handle.send_response(request_id, bytes);
-                    }
-                }
-                Err(e) => {
-                    warn!(error = %e, "failed to decode PEX request");
+            } => {
+                // P3: Only accept PEX from known peers (peers in peer_map or connected)
+                if !self.peer_map.peer_to_validator.contains_key(&peer)
+                    && !self.connected_peers.contains(&peer)
+                {
+                    warn!(peer = %peer, "rejecting PEX request from unknown peer");
                     self.pex_handle.reject_request(request_id);
+                    return;
                 }
-            },
+                match serde_cbor_2::from_slice::<PexRequest>(&request) {
+                    Ok(PexRequest::GetPeers) => {
+                        let book = self.peer_book.read().unwrap();
+                        let private = &self.pex_config.private_peer_ids;
+                        let peers: Vec<PeerInfo> = book
+                            .get_random_peers(self.pex_config.max_peers_per_response)
+                            .into_iter()
+                            .filter(|p| p.peer_id != peer.to_string())
+                            // P4: exclude private peers from PEX responses
+                            .filter(|p| !private.contains(&p.peer_id))
+                            .cloned()
+                            .collect();
+                        let resp = PexResponse::Peers(peers);
+                        if let Ok(bytes) = serde_cbor_2::to_vec(&resp) {
+                            self.pex_handle.send_response(request_id, bytes);
+                        }
+                    }
+                    Ok(PexRequest::Advertise {
+                        role,
+                        validator_id,
+                        addresses,
+                    }) => {
+                        // P2: If claiming validator_id, verify PeerId matches peer_map
+                        if let Some(vid) = validator_id
+                            && let Some(&expected_peer) =
+                                self.peer_map.validator_to_peer.get(&ValidatorId(vid))
+                            && expected_peer != peer
+                        {
+                            warn!(
+                                peer = %peer,
+                                claimed_vid = vid,
+                                "PEX Advertise validator_id mismatch, rejecting"
+                            );
+                            self.pex_handle.reject_request(request_id);
+                            return;
+                        }
+                        let mut info = PeerInfo::new(
+                            peer,
+                            role,
+                            addresses.iter().filter_map(|a| a.parse().ok()).collect(),
+                        );
+                        if let Some(vid) = validator_id {
+                            info = info.with_validator(ValidatorId(vid));
+                        }
+                        self.peer_book.write().unwrap().add_peer(info);
+                        if let Ok(bytes) = serde_cbor_2::to_vec(&PexResponse::Ack) {
+                            self.pex_handle.send_response(request_id, bytes);
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "failed to decode PEX request");
+                        self.pex_handle.reject_request(request_id);
+                    }
+                }
+            }
             RequestResponseEvent::ResponseReceived { response, .. } => {
                 if let Ok(PexResponse::Peers(peers)) = serde_cbor_2::from_slice(&response) {
                     let mut book = self.peer_book.write().unwrap();
@@ -622,6 +651,36 @@ impl NetworkService {
             NetCommand::SyncRespond(request_id, bytes) => {
                 self.sync_handle.send_response(request_id, bytes);
             }
+            NetCommand::EpochChange(validators) => {
+                // Rebuild peer_map entries for new validators using PeerBook
+                for (vid, pubkey) in &validators {
+                    if self.peer_map.validator_to_peer.contains_key(vid) {
+                        continue;
+                    }
+                    // Try to find PeerId from PeerBook by looking up the public key
+                    let pk_bytes = &pubkey.0;
+                    if let Ok(lpk) = litep2p::crypto::ed25519::PublicKey::try_from_bytes(pk_bytes) {
+                        let peer_id = lpk.to_peer_id();
+                        info!(validator = %vid, peer = %peer_id, "adding new epoch validator to peer_map");
+                        self.peer_map.insert(*vid, peer_id);
+                    }
+                }
+                // Remove validators no longer in the set
+                let new_ids: std::collections::HashSet<ValidatorId> =
+                    validators.iter().map(|(vid, _)| *vid).collect();
+                let to_remove: Vec<ValidatorId> = self
+                    .peer_map
+                    .validator_to_peer
+                    .keys()
+                    .filter(|vid| !new_ids.contains(vid))
+                    .copied()
+                    .collect();
+                for vid in to_remove {
+                    info!(validator = %vid, "removing validator from peer_map after epoch change");
+                    self.peer_map.remove(vid);
+                }
+                self.update_peer_info();
+            }
         }
     }
 }
@@ -681,6 +740,17 @@ impl NetworkSink for Litep2pNetworkSink {
             && let Err(e) = self.cmd_tx.try_send(NetCommand::SendTo(target, bytes))
         {
             warn!("send_to cmd dropped for {target}: {e}");
+        }
+    }
+
+    fn on_epoch_change(&self, new_validator_set: &hotmint_types::ValidatorSet) {
+        let validators: Vec<_> = new_validator_set
+            .validators()
+            .iter()
+            .map(|v| (v.id, v.public_key.clone()))
+            .collect();
+        if let Err(e) = self.cmd_tx.try_send(NetCommand::EpochChange(validators)) {
+            warn!("epoch change cmd dropped: {e}");
         }
     }
 }

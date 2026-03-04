@@ -60,8 +60,6 @@ pub struct P2pConfig {
     pub laddr: String,
     /// Persistent peers: `"<validator_id>@<multiaddr>"`.
     pub persistent_peers: Vec<String>,
-    /// Maximum number of connected peers.
-    pub max_peers: usize,
     /// Peer IDs that should not be advertised to other peers (sentry protection).
     pub private_peer_ids: Vec<String>,
 }
@@ -90,7 +88,6 @@ impl Default for NodeConfig {
             p2p: P2pConfig {
                 laddr: "/ip4/0.0.0.0/tcp/26656".into(),
                 persistent_peers: vec![],
-                max_peers: 50,
                 private_peer_ids: vec![],
             },
             pex: hotmint_network::pex::PexConfig::default(),

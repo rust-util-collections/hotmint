@@ -118,10 +118,15 @@ async fn handle_request(state: &RpcState, line: &str) -> RpcResponse {
         }
 
         "submit_tx" => {
-            let tx_hex = req.params.as_str().unwrap_or_default();
+            let Some(tx_hex) = req.params.as_str() else {
+                return RpcResponse::err(req.id, -32602, "params must be a hex string".to_string());
+            };
+            if tx_hex.is_empty() {
+                return RpcResponse::err(req.id, -32602, "empty transaction".to_string());
+            }
             let tx_bytes = match hex_decode(tx_hex) {
-                Some(b) => b,
-                None => {
+                Some(b) if !b.is_empty() => b,
+                _ => {
                     return RpcResponse::err(req.id, -32602, "invalid hex".to_string());
                 }
             };

@@ -192,7 +192,11 @@ async fn run_node(
             known_addresses,
             Some(litep2p_keypair),
             peer_book,
-            config.pex.clone(),
+            {
+                let mut pex = config.pex.clone();
+                pex.private_peer_ids = config.p2p.private_peer_ids.clone();
+                pex
+            },
         )?
     };
 
