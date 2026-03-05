@@ -2,7 +2,7 @@ use ruc::*;
 use vsdb::versioned::BranchId;
 use vsdb::{Orphan, SlotDex128, SmtCalc, SmtProof, VerMapWithProof};
 
-use crate::types::{OutPoint, TxOutput, UtxoTx};
+use crate::utxo_types::{OutPoint, TxOutput, UtxoTx};
 
 /// Map a pubkey_hash to a u128 slot for SlotDex address indexing.
 ///
@@ -23,12 +23,18 @@ fn addr_slot(pubkey_hash: &[u8; 32]) -> u128 {
 pub struct UtxoState {
     /// Primary UTXO set with Sparse Merkle Tree commitment.
     utxos: VerMapWithProof<[u8; 36], TxOutput, SmtCalc>,
-    /// Address → UTXO index for paginated queries.
+    /// Address -> UTXO index for paginated queries.
     addr_index: SlotDex128<[u8; 36]>,
     /// Total supply (sum of all UTXO values).
     total_supply: Orphan<u64>,
     /// Cached main branch ID.
     main_branch: BranchId,
+}
+
+impl Default for UtxoState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl UtxoState {
@@ -48,12 +54,6 @@ impl UtxoState {
     pub fn get_utxo(&self, outpoint: &OutPoint) -> Option<TxOutput> {
         let key = outpoint.to_key();
         self.utxos.map().get(self.main_branch, &key).ok().flatten()
-    }
-
-    /// Check if a UTXO exists.
-    #[allow(dead_code)]
-    pub fn utxo_exists(&self, outpoint: &OutPoint) -> bool {
-        self.get_utxo(outpoint).is_some()
     }
 
     /// Apply a validated transaction: spend inputs, create outputs.
@@ -126,7 +126,6 @@ impl UtxoState {
     }
 
     /// Query all UTXOs owned by `pubkey_hash` (paginated).
-    #[allow(dead_code)]
     pub fn get_utxos_by_address(
         &self,
         pubkey_hash: &[u8; 32],

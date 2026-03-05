@@ -8,12 +8,12 @@ use hotmint_consensus::state::ConsensusState;
 use hotmint_consensus::store::MemoryBlockStore;
 use hotmint_crypto::{Ed25519Signer, Ed25519Verifier};
 use hotmint_types::*;
-use hotmint_utxo::hash_pubkey;
 use rand::rngs::OsRng;
 use tokio::sync::mpsc;
 use tracing::{Level, info};
 
 use utxo_chain::app::DemoUtxoApp;
+use utxo_chain::hash_pubkey;
 
 const NUM_VALIDATORS: u64 = 4;
 

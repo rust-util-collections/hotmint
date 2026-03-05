@@ -19,7 +19,7 @@ use hotmint_types::*;
 use rand::rngs::OsRng;
 use tokio::sync::mpsc;
 
-use hotmint_utxo::*;
+use utxo_chain::*;
 
 const NUM_VALIDATORS: u64 = 4;
 const DURATION_SECS: u64 = 10;

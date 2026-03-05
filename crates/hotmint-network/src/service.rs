@@ -97,6 +97,17 @@ pub struct IncomingSyncRequest {
     pub request: SyncRequest,
 }
 
+/// All handles returned by [`NetworkService::create`].
+pub struct NetworkServiceHandles {
+    pub service: NetworkService,
+    pub sink: Litep2pNetworkSink,
+    pub msg_rx: mpsc::Receiver<(ValidatorId, ConsensusMessage)>,
+    pub sync_req_rx: mpsc::Receiver<IncomingSyncRequest>,
+    pub sync_resp_rx: mpsc::Receiver<SyncResponse>,
+    pub peer_info_rx: watch::Receiver<Vec<PeerStatus>>,
+    pub connected_count_rx: watch::Receiver<usize>,
+}
+
 /// NetworkService wraps litep2p and provides consensus-level networking
 pub struct NetworkService {
     litep2p: Litep2p,
@@ -118,16 +129,7 @@ pub struct NetworkService {
 }
 
 impl NetworkService {
-    /// Create the network service and a NetworkSink for the consensus engine.
-    ///
-    /// Returns:
-    /// - `NetworkService` — run with `.run()`
-    /// - `Litep2pNetworkSink` — for consensus engine + RPC peer management
-    /// - `msg_rx` — consensus messages for the engine
-    /// - `sync_req_rx` — incoming sync requests for the sync responder
-    /// - `sync_resp_rx` — sync responses for the sync requester
-    /// - `peer_info_rx` — peer list updates for RPC
-    #[allow(clippy::type_complexity)]
+    /// Create the network service and all handles for the consensus engine.
     pub fn create(
         listen_addr: Multiaddr,
         peer_map: PeerMap,
@@ -135,15 +137,7 @@ impl NetworkService {
         keypair: Option<litep2p::crypto::ed25519::Keypair>,
         peer_book: Arc<RwLock<PeerBook>>,
         pex_config: PexConfig,
-    ) -> Result<(
-        Self,
-        Litep2pNetworkSink,
-        mpsc::Receiver<(ValidatorId, ConsensusMessage)>,
-        mpsc::Receiver<IncomingSyncRequest>,
-        mpsc::Receiver<SyncResponse>,
-        watch::Receiver<Vec<PeerStatus>>,
-        watch::Receiver<usize>,
-    )> {
+    ) -> Result<NetworkServiceHandles> {
         let (notif_config, notif_handle) = NotifConfigBuilder::new(NOTIF_PROTOCOL.into())
             .with_max_size(MAX_NOTIFICATION_SIZE)
             .with_handshake(vec![])
@@ -215,8 +209,8 @@ impl NetworkService {
         // Save persistent peers for auto-reconnect
         let persistent_peers: HashMap<ValidatorId, PeerId> = peer_map.validator_to_peer.clone();
 
-        Ok((
-            Self {
+        Ok(NetworkServiceHandles {
+            service: Self {
                 litep2p,
                 notif_handle,
                 reqresp_handle,
@@ -240,7 +234,7 @@ impl NetworkService {
             sync_resp_rx,
             peer_info_rx,
             connected_count_rx,
-        ))
+        })
     }
 
     pub fn local_peer_id(&self) -> &PeerId {

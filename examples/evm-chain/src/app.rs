@@ -5,7 +5,7 @@ use hotmint_types::Block;
 use hotmint_types::context::BlockContext;
 use hotmint_types::validator_update::EndBlockResponse;
 
-pub use hotmint_evm::{Address, ETH, EvmApplication, EvmConfig, EvmTx, GenesisAccount, U256};
+use crate::{ETH, EvmApplication, EvmConfig, EvmTx, GenesisAccount, U256, encode_payload};
 
 pub const ALICE: [u8; 20] = [0xAA; 20];
 pub const BOB: [u8; 20] = [0xBB; 20];
@@ -41,7 +41,7 @@ impl Application for DemoEvmApp {
     fn create_payload(&self, _ctx: &BlockContext) -> Vec<u8> {
         let nonce = self.inner.get_nonce(&ALICE);
         let tx = EvmTx::transfer(ALICE, BOB, ETH, nonce);
-        hotmint_evm::encode_payload(&[tx])
+        encode_payload(&[tx])
     }
 
     fn execute_block(&self, txs: &[&[u8]], ctx: &BlockContext) -> Result<EndBlockResponse> {

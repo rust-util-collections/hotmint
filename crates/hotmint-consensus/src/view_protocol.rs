@@ -164,19 +164,28 @@ pub fn propose(
     Ok(block)
 }
 
+/// Incoming proposal data from the leader.
+pub struct ProposalData {
+    pub block: Block,
+    pub justify: QuorumCertificate,
+    pub double_cert: Option<DoubleCertificate>,
+}
+
 /// Execute step (3): Replica receives proposal, validates, votes.
 /// Returns `Option<Epoch>` if fast-forward commit triggered an epoch change.
-#[allow(clippy::too_many_arguments)]
 pub fn on_proposal(
     state: &mut ConsensusState,
-    block: Block,
-    justify: QuorumCertificate,
-    double_cert: Option<DoubleCertificate>,
+    proposal: ProposalData,
     store: &mut dyn BlockStore,
     network: &dyn NetworkSink,
     app: &dyn Application,
     signer: &dyn Signer,
 ) -> Result<Option<Epoch>> {
+    let ProposalData {
+        block,
+        justify,
+        double_cert,
+    } = proposal;
     if state.step != ViewStep::WaitingForProposal {
         debug!(
             validator = %state.validator_id,

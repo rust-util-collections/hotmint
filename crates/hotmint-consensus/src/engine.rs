@@ -458,9 +458,11 @@ impl ConsensusEngine {
                 let mut store = self.store.write().unwrap();
                 let maybe_pending = view_protocol::on_proposal(
                     &mut self.state,
-                    block,
-                    justify,
-                    double_cert,
+                    view_protocol::ProposalData {
+                        block,
+                        justify,
+                        double_cert,
+                    },
                     store.as_mut(),
                     self.network.as_ref(),
                     self.app.as_ref(),

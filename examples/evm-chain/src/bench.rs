@@ -18,7 +18,7 @@ use hotmint_types::*;
 use tokio::sync::mpsc;
 
 use evm_chain::app::{ALICE, BOB};
-use hotmint_evm::{self as tx, EvmTx};
+use evm_chain::{EvmTx, encode_payload};
 
 use revm::context::TxEnv;
 use revm::database::CacheDB;
@@ -83,7 +83,7 @@ impl Application for EvmBenchApp {
         let txs: Vec<EvmTx> = (0..TXS_PER_BLOCK)
             .map(|i| EvmTx::transfer(ALICE, BOB, ETH / 100, nonce + i as u64))
             .collect();
-        tx::encode_payload(&txs)
+        encode_payload(&txs)
     }
 
     fn execute_block(&self, txs: &[&[u8]], _ctx: &BlockContext) -> Result<EndBlockResponse> {
@@ -144,7 +144,6 @@ async fn run_bench(label: &str, base_timeout_ms: u64) {
         all_senders.insert(ValidatorId(i), tx);
     }
 
-    let _total_commits = Arc::new(AtomicU64::new(0));
     let total_txs = Arc::new(AtomicU64::new(0));
     let mut commit_counters = Vec::new();
     let mut handles = Vec::new();

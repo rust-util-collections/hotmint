@@ -17,7 +17,7 @@ use revm::primitives::{Address, TxKind, U256};
 use revm::state::AccountInfo;
 use revm::{Context, MainBuilder, MainContext};
 
-use crate::tx::EvmTx;
+use crate::evm_tx::EvmTx;
 
 /// Encode account state as `nonce(8) || balance(32) || code_hash(32)` for trie insertion.
 fn encode_account_state(info: &AccountInfo) -> Vec<u8> {
@@ -79,21 +79,9 @@ impl Default for EvmConfig {
 /// EVM-compatible chain. Transactions are decoded from CBOR-encoded
 /// [`EvmTx`] structs in the block payload.
 ///
-/// # Example
-///
-/// ```ignore
-/// use hotmint_evm::*;
-///
-/// let config = EvmConfig {
-///     genesis_allocs: vec![
-///         GenesisAccount::funded([0xAA; 20], U256::from(100) * U256::from(ETH)),
-///     ],
-///     log_on_commit: true,
-///     ..Default::default()
-/// };
-/// let app = EvmApplication::new(config);
-/// // Pass Box::new(app) to ConsensusEngine::new()
-/// ```
+/// **WARNING: This uses simplified unsigned transactions (no ECDSA
+/// signature verification). Production EVM chains MUST add transaction
+/// signature verification (e.g., secp256k1 ECDSA recovery).**
 pub struct EvmApplication {
     db: Mutex<CacheDB<EmptyDB>>,
     state_trie: Mutex<MptCalc>,

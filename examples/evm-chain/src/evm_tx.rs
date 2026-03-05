@@ -15,7 +15,7 @@ pub struct EvmTx {
     pub nonce: u64,
     pub gas_limit: u64,
     pub data: Vec<u8>,
-    /// Dummy ECDSA signature (r ‖ s ‖ v, 65 bytes). Not verified.
+    /// Dummy ECDSA signature (r || s || v, 65 bytes). Not verified.
     pub signature: Vec<u8>,
 }
 

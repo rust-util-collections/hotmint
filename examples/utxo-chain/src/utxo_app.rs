@@ -10,8 +10,8 @@ use hotmint_types::Block;
 use hotmint_types::context::BlockContext;
 use hotmint_types::validator_update::EndBlockResponse;
 
-use crate::state::UtxoState;
-use crate::types::{OutPoint, TxOutput, UtxoTx, hash_pubkey};
+use crate::utxo_state::UtxoState;
+use crate::utxo_types::{OutPoint, TxOutput, UtxoTx, hash_pubkey};
 
 /// A genesis UTXO allocation.
 #[derive(Debug, Clone)]

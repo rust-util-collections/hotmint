@@ -173,15 +173,15 @@ async fn run_node(
         .parse()
         .c(d!("invalid p2p listen address: {}", config.p2p.laddr))?;
 
-    let (
-        network_service,
-        network_sink,
+    let hotmint::network::service::NetworkServiceHandles {
+        service: network_service,
+        sink: network_sink,
         msg_rx,
         sync_req_rx,
         mut sync_resp_rx,
         peer_info_rx,
         connected_count_rx,
-    ) = {
+    } = {
         let peer_book_path = home.join("data").join("peer_book.json");
         let peer_book = hotmint::network::peer::PeerBook::load(&peer_book_path)
             .unwrap_or_else(|_| hotmint::network::peer::PeerBook::new(&peer_book_path));

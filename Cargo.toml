@@ -11,12 +11,10 @@ members = [
     "crates/hotmint-api",
     "crates/hotmint-abci",
     "crates/hotmint-staking",
-    "examples/hotmint-evm",
     "examples/demo",
     "examples/evm-chain",
     "examples/bench-consensus",
     "examples/bench-ipc",
-    "examples/hotmint-utxo",
     "examples/utxo-chain",
 ]
 

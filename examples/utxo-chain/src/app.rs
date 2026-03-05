@@ -6,7 +6,7 @@ use hotmint_types::Block;
 use hotmint_types::context::BlockContext;
 use hotmint_types::validator_update::EndBlockResponse;
 
-use hotmint_utxo::*;
+use crate::*;
 
 /// Demo UTXO app: Alice sends 1 COIN to Bob each block.
 pub struct DemoUtxoApp {

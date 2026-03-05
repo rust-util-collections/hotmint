@@ -20,9 +20,8 @@ path = "src/bench.rs"
 hotmint-types = { path = "../../crates/hotmint-types" }
 hotmint-consensus = { path = "../../crates/hotmint-consensus" }
 hotmint-crypto = { path = "../../crates/hotmint-crypto" }
-hotmint-evm = { path = "../hotmint-evm" }
-
 revm = { version = "36", default-features = false, features = ["std"] }
+vsdb = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_cbor_2 = "0.13"
 tokio = { version = "1", features = ["full"] }

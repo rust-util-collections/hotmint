@@ -20,8 +20,6 @@ path = "src/bench.rs"
 hotmint-types = { path = "../../crates/hotmint-types" }
 hotmint-consensus = { path = "../../crates/hotmint-consensus" }
 hotmint-crypto = { path = "../../crates/hotmint-crypto" }
-hotmint-utxo = { path = "../hotmint-utxo" }
-
 ed25519-dalek = { version = "2.2", features = ["serde", "rand_core"] }
 rand = "0.8"
 vsdb = "10.1.3"
