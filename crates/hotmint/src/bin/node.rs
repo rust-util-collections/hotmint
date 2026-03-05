@@ -238,11 +238,11 @@ async fn run_node(
         .collect();
     let (vs_tx, vs_rx) = watch::channel(initial_vs);
 
-    let app = AppWithStatus {
+    let app: Arc<dyn Application> = Arc::new(AppWithStatus {
         inner: ipc_client,
         status_tx,
         vs_tx,
-    };
+    });
 
     // 10. Create mempool
     let mempool = Arc::new(Mempool::new(
@@ -258,6 +258,7 @@ async fn run_node(
         store: store.clone(),
         peer_info_rx,
         validator_set_rx: vs_rx,
+        app: Some(app.clone()),
     };
     let rpc_server = hotmint::api::rpc::RpcServer::bind(&config.rpc.laddr, rpc_state)
         .await
@@ -407,7 +408,7 @@ async fn run_node(
         state,
         store.clone(),
         Box::new(network_sink),
-        Box::new(app),
+        Box::new(ArcApp(app)),
         Box::new(signer),
         msg_rx,
         EngineConfig {
@@ -480,5 +481,32 @@ impl Application for AppWithStatus {
 
     fn query(&self, path: &str, data: &[u8]) -> Result<Vec<u8>> {
         self.inner.query(path, data)
+    }
+}
+
+/// Newtype wrapper to use `Arc<dyn Application>` as `Box<dyn Application>`.
+struct ArcApp(Arc<dyn Application>);
+
+impl Application for ArcApp {
+    fn create_payload(&self, ctx: &BlockContext) -> Vec<u8> {
+        self.0.create_payload(ctx)
+    }
+    fn validate_block(&self, block: &Block, ctx: &BlockContext) -> bool {
+        self.0.validate_block(block, ctx)
+    }
+    fn validate_tx(&self, tx: &[u8], ctx: Option<&hotmint_types::context::TxContext>) -> bool {
+        self.0.validate_tx(tx, ctx)
+    }
+    fn execute_block(&self, txs: &[&[u8]], ctx: &BlockContext) -> Result<EndBlockResponse> {
+        self.0.execute_block(txs, ctx)
+    }
+    fn on_commit(&self, block: &Block, ctx: &BlockContext) -> Result<()> {
+        self.0.on_commit(block, ctx)
+    }
+    fn on_evidence(&self, proof: &EquivocationProof) -> Result<()> {
+        self.0.on_evidence(proof)
+    }
+    fn query(&self, path: &str, data: &[u8]) -> Result<Vec<u8>> {
+        self.0.query(path, data)
     }
 }

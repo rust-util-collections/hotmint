@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use hotmint_consensus::engine::{ConsensusEngine, EngineConfig};
@@ -65,8 +64,6 @@ async fn main() {
         all_senders.insert(vid, tx);
     }
 
-    // Track commits
-    let commit_count = Arc::new(AtomicU64::new(0));
     let mut handles = Vec::new();
 
     for (i, signer) in signers.into_iter().enumerate() {
@@ -108,10 +105,6 @@ async fn main() {
     // Run for 30 seconds
     tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
 
-    let total = commit_count.load(Ordering::Relaxed);
     info!("\n=== EVM Chain Demo Complete ===");
-    info!(
-        "Ran for 30 seconds, {} total commits across validators",
-        total
-    );
+    info!("Ran for 30 seconds");
 }

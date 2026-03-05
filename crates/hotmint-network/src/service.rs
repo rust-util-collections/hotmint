@@ -320,7 +320,11 @@ impl NetworkService {
                         }
                     }
                     Err(e) => {
-                        warn!(error = %e, "failed to decode notification");
+                        warn!(error = %e, peer = %peer, "failed to decode notification");
+                        self.peer_book
+                            .write()
+                            .unwrap()
+                            .adjust_score(&peer.to_string(), -10);
                     }
                 }
             }
@@ -387,7 +391,11 @@ impl NetworkService {
                         }
                     }
                     Err(e) => {
-                        warn!(error = %e, "failed to decode sync request");
+                        warn!(error = %e, peer = %peer, "failed to decode sync request");
+                        self.peer_book
+                            .write()
+                            .unwrap()
+                            .adjust_score(&peer.to_string(), -5);
                         let err_resp = SyncResponse::Error(format!("decode error: {e}"));
                         if let Ok(bytes) = serde_cbor_2::to_vec(&err_resp) {
                             self.sync_handle.send_response(request_id, bytes);
@@ -578,6 +586,17 @@ impl NetworkService {
     fn handle_litep2p_event(&mut self, event: Litep2pEvent) {
         match event {
             Litep2pEvent::ConnectionEstablished { peer, endpoint } => {
+                // Enforce total connection limit
+                if self.connected_peers.len() >= self.pex_config.max_peers {
+                    warn!(
+                        peer = %peer,
+                        total = self.connected_peers.len(),
+                        max = self.pex_config.max_peers,
+                        "connection limit reached, ignoring new peer"
+                    );
+                    return;
+                }
+
                 info!(peer = %peer, endpoint = ?endpoint, "connection established");
                 self.connected_peers.insert(peer);
                 let _ = self.connected_count_tx.send(self.connected_peers.len());

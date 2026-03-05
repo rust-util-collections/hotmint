@@ -6,7 +6,9 @@ use hotmint_types::validator_update::ValidatorUpdate;
 
 use crate::rewards;
 use crate::store::StakingStore;
-use crate::types::{SlashReason, SlashResult, StakeEntry, StakingConfig, ValidatorState};
+use crate::types::{
+    SlashReason, SlashResult, StakeEntry, StakingConfig, UnbondingEntry, ValidatorState,
+};
 
 /// Central staking manager that operates on any [`StakingStore`] backend.
 ///
@@ -119,7 +121,17 @@ impl<S: StakingStore> StakingManager<S> {
     }
 
     /// Undelegate `amount` from `staker`'s delegation to `validator`.
-    pub fn undelegate(&mut self, staker: &[u8], validator: ValidatorId, amount: u64) -> Result<()> {
+    ///
+    /// Voting power is reduced immediately. If `unbonding_period > 0`, the
+    /// tokens are locked in an unbonding queue and released only after
+    /// [`process_unbonding`] is called at or after `current_height + unbonding_period`.
+    pub fn undelegate(
+        &mut self,
+        staker: &[u8],
+        validator: ValidatorId,
+        amount: u64,
+        current_height: u64,
+    ) -> Result<()> {
         if amount == 0 {
             return Err(eg!("cannot undelegate zero amount"));
         }
@@ -149,7 +161,25 @@ impl<S: StakingStore> StakingManager<S> {
             self.store.set_stake(staker, validator, entry);
         }
         self.store.set_validator(validator, vs);
+
+        // Queue unbonding entry
+        let completion_height = current_height.saturating_add(self.config.unbonding_period);
+        self.store.push_unbonding(UnbondingEntry {
+            staker: staker.to_vec(),
+            validator,
+            amount,
+            completion_height,
+        });
+
         Ok(())
+    }
+
+    /// Process mature unbondings whose lock period has elapsed.
+    ///
+    /// Returns the completed entries so the application can credit the
+    /// released tokens to the stakers' balances.
+    pub fn process_unbonding(&mut self, current_height: u64) -> Vec<UnbondingEntry> {
+        self.store.drain_mature_unbondings(current_height)
     }
 
     // ── Slashing ───────────────────────────────────────────────────
@@ -183,14 +213,23 @@ impl<S: StakingStore> StakingManager<S> {
         vs.jail_until_height = current_height.saturating_add(self.config.jail_duration);
         vs.score = vs.score.saturating_sub(self.config.max_score / 10);
 
-        // Proportionally reduce each staker's delegation
+        // Proportionally reduce each staker's delegation.
+        // The last staker absorbs any rounding remainder so that
+        // sum(staker.amount) == vs.delegated_stake after slashing.
         if del_slash > 0 {
             let stakers = self.store.stakers_of(id);
             let total_del: u64 = stakers.iter().map(|(_, e)| e.amount).sum();
             if total_del > 0 {
-                for (addr, mut entry) in stakers {
-                    let staker_slash =
-                        (entry.amount as u128 * del_slash as u128 / total_del as u128) as u64;
+                let count = stakers.len();
+                let mut slashed_so_far = 0u64;
+                for (i, (addr, mut entry)) in stakers.into_iter().enumerate() {
+                    let staker_slash = if i == count - 1 {
+                        // Last staker absorbs remainder
+                        del_slash.saturating_sub(slashed_so_far)
+                    } else {
+                        (entry.amount as u128 * del_slash as u128 / total_del as u128) as u64
+                    };
+                    slashed_so_far = slashed_so_far.saturating_add(staker_slash);
                     entry.amount = entry.amount.saturating_sub(staker_slash);
                     if entry.amount == 0 {
                         self.store.remove_stake(&addr, id);
@@ -203,9 +242,26 @@ impl<S: StakingStore> StakingManager<S> {
 
         self.store.set_validator(id, vs);
 
+        // Slash pending unbondings for this validator at the same rate
+        let unbondings = self.store.all_unbondings();
+        let mut unbonding_slashed = 0u64;
+        let updated: Vec<UnbondingEntry> = unbondings
+            .into_iter()
+            .map(|mut e| {
+                if e.validator == id && e.amount > 0 {
+                    let ub_slash = (e.amount as u128 * rate as u128 / 10_000) as u64;
+                    e.amount = e.amount.saturating_sub(ub_slash);
+                    unbonding_slashed = unbonding_slashed.saturating_add(ub_slash);
+                }
+                e
+            })
+            .filter(|e| e.amount > 0)
+            .collect();
+        self.store.replace_unbondings(updated);
+
         Ok(SlashResult {
             self_slashed: self_slash,
-            delegated_slashed: del_slash,
+            delegated_slashed: del_slash.saturating_add(unbonding_slashed),
             jailed: true,
         })
     }
@@ -238,7 +294,7 @@ impl<S: StakingStore> StakingManager<S> {
     /// Increase a validator's reputation score.
     pub fn increment_score(&mut self, id: ValidatorId, delta: u32) {
         if let Some(mut vs) = self.store.get_validator(id) {
-            vs.score = (vs.score + delta).min(self.config.max_score);
+            vs.score = vs.score.saturating_add(delta).min(self.config.max_score);
             self.store.set_validator(id, vs);
         }
     }

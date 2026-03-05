@@ -2,6 +2,7 @@ use std::sync::Mutex;
 
 use ruc::*;
 use tracing::{info, warn};
+use vsdb::MptCalc;
 
 use hotmint_consensus::application::Application;
 use hotmint_types::Block;
@@ -17,6 +18,15 @@ use revm::state::AccountInfo;
 use revm::{Context, MainBuilder, MainContext};
 
 use crate::tx::EvmTx;
+
+/// Encode account state as `nonce(8) || balance(32) || code_hash(32)` for trie insertion.
+fn encode_account_state(info: &AccountInfo) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(72);
+    buf.extend_from_slice(&info.nonce.to_be_bytes());
+    buf.extend_from_slice(&info.balance.to_be_bytes::<32>());
+    buf.extend_from_slice(info.code_hash.as_slice());
+    buf
+}
 
 /// Genesis account allocation.
 #[derive(Debug, Clone)]
@@ -86,6 +96,7 @@ impl Default for EvmConfig {
 /// ```
 pub struct EvmApplication {
     db: Mutex<CacheDB<EmptyDB>>,
+    state_trie: Mutex<MptCalc>,
     config: EvmConfig,
 }
 
@@ -110,8 +121,18 @@ impl EvmApplication {
             db.insert_account_info(addr, info);
         }
 
+        // Initialize state trie with genesis accounts
+        let mut state_trie = MptCalc::new();
+        for alloc in &config.genesis_allocs {
+            let addr = Address::new(alloc.address);
+            if let Some(acct) = db.cache.accounts.get(&addr) {
+                let _ = state_trie.insert(addr.as_slice(), &encode_account_state(&acct.info));
+            }
+        }
+
         Self {
             db: Mutex::new(db),
+            state_trie: Mutex::new(state_trie),
             config,
         }
     }
@@ -172,8 +193,8 @@ impl Application for EvmApplication {
             let mut evm = Context::mainnet().with_db(&mut *db).build_mainnet();
 
             match evm.transact_commit(tx_env) {
-                Ok(_) => {
-                    gas_used = gas_used.saturating_add(tx.gas_limit);
+                Ok(result) => {
+                    gas_used = gas_used.saturating_add(result.gas_used());
                 }
                 Err(e) => {
                     warn!(
@@ -184,6 +205,22 @@ impl Application for EvmApplication {
                 }
             }
         }
+
+        // --- Trie maintenance ---
+
+        // 1. Build per-block Transactions Trie
+        let mut tx_trie = MptCalc::new();
+        for (i, tx_bytes) in txs.iter().enumerate() {
+            let _ = tx_trie.insert(&i.to_be_bytes(), tx_bytes);
+        }
+        let _tx_root = tx_trie.root_hash().unwrap_or_default();
+
+        // 2. Update persistent State Trie with all cached accounts
+        let mut state_trie = self.state_trie.lock().unwrap_or_else(|e| e.into_inner());
+        for (addr, acct) in &db.cache.accounts {
+            let _ = state_trie.insert(addr.as_slice(), &encode_account_state(&acct.info));
+        }
+        let _state_root = state_trie.root_hash().unwrap_or_default();
 
         Ok(EndBlockResponse::default())
     }

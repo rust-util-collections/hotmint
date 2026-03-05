@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use hotmint_types::validator::ValidatorId;
 
-use crate::types::{StakeEntry, ValidatorState};
+use crate::types::{StakeEntry, UnbondingEntry, ValidatorState};
 
 /// Abstract storage backend for staking state.
 ///
@@ -20,6 +20,20 @@ pub trait StakingStore {
     fn remove_stake(&mut self, staker: &[u8], validator: ValidatorId);
     /// Return all (staker_address, entry) pairs for a given validator.
     fn stakers_of(&self, validator: ValidatorId) -> Vec<(Vec<u8>, StakeEntry)>;
+
+    // ── Unbonding queue ─────────────────────────────────────────────
+
+    /// Append an entry to the unbonding queue.
+    fn push_unbonding(&mut self, entry: UnbondingEntry);
+
+    /// Remove and return all entries whose `completion_height <= current_height`.
+    fn drain_mature_unbondings(&mut self, current_height: u64) -> Vec<UnbondingEntry>;
+
+    /// Return all pending unbonding entries (for slashing).
+    fn all_unbondings(&self) -> Vec<UnbondingEntry>;
+
+    /// Replace the entire unbonding queue (used after slashing adjustments).
+    fn replace_unbondings(&mut self, entries: Vec<UnbondingEntry>);
 }
 
 /// In-memory staking store for testing and demos.
@@ -28,6 +42,7 @@ pub struct InMemoryStakingStore {
     validators: HashMap<ValidatorId, ValidatorState>,
     /// Key: (staker_address, validator_id)
     stakes: HashMap<(Vec<u8>, ValidatorId), StakeEntry>,
+    unbondings: Vec<UnbondingEntry>,
 }
 
 impl InMemoryStakingStore {
@@ -71,5 +86,26 @@ impl StakingStore for InMemoryStakingStore {
             .filter(|((_, vid), _)| *vid == validator)
             .map(|((addr, _), entry)| (addr.clone(), entry.clone()))
             .collect()
+    }
+
+    fn push_unbonding(&mut self, entry: UnbondingEntry) {
+        self.unbondings.push(entry);
+    }
+
+    fn drain_mature_unbondings(&mut self, current_height: u64) -> Vec<UnbondingEntry> {
+        let (mature, pending): (Vec<_>, Vec<_>) = self
+            .unbondings
+            .drain(..)
+            .partition(|e| e.completion_height <= current_height);
+        self.unbondings = pending;
+        mature
+    }
+
+    fn all_unbondings(&self) -> Vec<UnbondingEntry> {
+        self.unbondings.clone()
+    }
+
+    fn replace_unbondings(&mut self, entries: Vec<UnbondingEntry>) {
+        self.unbondings = entries;
     }
 }

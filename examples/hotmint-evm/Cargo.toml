@@ -16,6 +16,7 @@ serde_cbor_2 = { workspace = true }
 ruc = { workspace = true }
 tracing = { workspace = true }
 revm = { version = "36", default-features = false, features = ["std"] }
+vsdb = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

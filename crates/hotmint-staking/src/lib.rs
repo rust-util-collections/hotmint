@@ -5,4 +5,6 @@ pub mod types;
 
 pub use manager::StakingManager;
 pub use store::{InMemoryStakingStore, StakingStore};
-pub use types::{SlashReason, SlashResult, StakeEntry, StakingConfig, ValidatorState};
+pub use types::{
+    SlashReason, SlashResult, StakeEntry, StakingConfig, UnbondingEntry, ValidatorState,
+};

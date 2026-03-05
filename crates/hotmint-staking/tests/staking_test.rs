@@ -49,11 +49,11 @@ fn delegate_and_undelegate() {
     mgr.delegate(b"alice", ValidatorId(0), 500).unwrap();
     assert_eq!(mgr.voting_power(ValidatorId(0)), 1500);
 
-    mgr.undelegate(b"alice", ValidatorId(0), 200).unwrap();
+    mgr.undelegate(b"alice", ValidatorId(0), 200, 1).unwrap();
     assert_eq!(mgr.voting_power(ValidatorId(0)), 1300);
 
     // Full undelegate
-    mgr.undelegate(b"alice", ValidatorId(0), 300).unwrap();
+    mgr.undelegate(b"alice", ValidatorId(0), 300, 1).unwrap();
     assert_eq!(mgr.voting_power(ValidatorId(0)), 1000);
 }
 
@@ -62,7 +62,7 @@ fn undelegate_insufficient_fails() {
     let mut mgr = make_manager();
     mgr.register_validator(ValidatorId(0), pk(0), 1000).unwrap();
     mgr.delegate(b"alice", ValidatorId(0), 100).unwrap();
-    assert!(mgr.undelegate(b"alice", ValidatorId(0), 200).is_err());
+    assert!(mgr.undelegate(b"alice", ValidatorId(0), 200, 1).is_err());
 }
 
 #[test]
@@ -272,4 +272,84 @@ fn score_management() {
 
     mgr.decrement_score(ValidatorId(0), 20_000); // saturating
     assert_eq!(mgr.get_validator(ValidatorId(0)).unwrap().score, 0);
+}
+
+#[test]
+fn slash_delegation_rounding_no_dust() {
+    let mut mgr = make_manager();
+    mgr.register_validator(ValidatorId(0), pk(0), 10_000)
+        .unwrap();
+    // Three delegators with amounts that don't divide evenly
+    mgr.delegate(b"alice", ValidatorId(0), 333).unwrap();
+    mgr.delegate(b"bob", ValidatorId(0), 333).unwrap();
+    mgr.delegate(b"carol", ValidatorId(0), 334).unwrap();
+
+    mgr.slash(ValidatorId(0), SlashReason::DoubleSign, 100)
+        .unwrap();
+
+    let vs = mgr.get_validator(ValidatorId(0)).unwrap();
+    // Verify: sum of remaining staker amounts == vs.delegated_stake
+    let alice = mgr
+        .store()
+        .get_stake(b"alice", ValidatorId(0))
+        .map(|e| e.amount)
+        .unwrap_or(0);
+    let bob = mgr
+        .store()
+        .get_stake(b"bob", ValidatorId(0))
+        .map(|e| e.amount)
+        .unwrap_or(0);
+    let carol = mgr
+        .store()
+        .get_stake(b"carol", ValidatorId(0))
+        .map(|e| e.amount)
+        .unwrap_or(0);
+    assert_eq!(alice + bob + carol, vs.delegated_stake);
+}
+
+#[test]
+fn undelegate_with_unbonding_period() {
+    let mut mgr = make_manager();
+    mgr.register_validator(ValidatorId(0), pk(0), 1000).unwrap();
+    mgr.delegate(b"alice", ValidatorId(0), 500).unwrap();
+
+    // Undelegate at height 100
+    mgr.undelegate(b"alice", ValidatorId(0), 200, 100).unwrap();
+
+    // Voting power drops immediately
+    assert_eq!(mgr.voting_power(ValidatorId(0)), 1300);
+
+    // Not yet mature (default unbonding_period = 1000)
+    let mature = mgr.process_unbonding(500);
+    assert!(mature.is_empty());
+
+    // Mature at height 1100
+    let mature = mgr.process_unbonding(1100);
+    assert_eq!(mature.len(), 1);
+    assert_eq!(mature[0].amount, 200);
+    assert_eq!(mature[0].staker, b"alice");
+}
+
+#[test]
+fn slash_hits_unbonding_entries() {
+    let mut mgr = make_manager();
+    mgr.register_validator(ValidatorId(0), pk(0), 10_000)
+        .unwrap();
+    mgr.delegate(b"alice", ValidatorId(0), 5_000).unwrap();
+
+    // Undelegate, then slash before unbonding completes
+    mgr.undelegate(b"alice", ValidatorId(0), 2_000, 100)
+        .unwrap();
+    let result = mgr
+        .slash(ValidatorId(0), SlashReason::DoubleSign, 200)
+        .unwrap();
+
+    // delegated_slashed includes both active delegation slash + unbonding slash
+    // Active: 3000 * 5% = 150, Unbonding: 2000 * 5% = 100 → total 250
+    assert_eq!(result.delegated_slashed, 250);
+
+    // Unbonding entry reduced: 2000 - 100 = 1900
+    let mature = mgr.process_unbonding(1200);
+    assert_eq!(mature.len(), 1);
+    assert_eq!(mature[0].amount, 1900);
 }

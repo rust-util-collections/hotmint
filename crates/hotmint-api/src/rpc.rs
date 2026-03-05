@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 use crate::types::{
     BlockInfo, EpochInfo, RpcRequest, RpcResponse, StatusInfo, TxResult, ValidatorInfoResponse,
 };
+use hotmint_consensus::application::Application;
 use hotmint_consensus::store::BlockStore;
 use hotmint_mempool::Mempool;
 use hotmint_network::service::PeerStatus;
@@ -17,6 +18,8 @@ use tracing::{info, warn};
 
 const MAX_RPC_CONNECTIONS: usize = 256;
 const RPC_READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// Maximum bytes per RPC line. Prevents OOM from clients sending huge data without newlines.
+const MAX_LINE_BYTES: usize = 1_048_576;
 
 /// Status tuple: (current_view, last_committed_height, epoch_number, validator_count, epoch_start_view)
 pub type StatusTuple = (u64, u64, u64, usize, u64);
@@ -32,6 +35,8 @@ pub struct RpcState {
     pub peer_info_rx: watch::Receiver<Vec<PeerStatus>>,
     /// Live validator set for get_validators
     pub validator_set_rx: watch::Receiver<Vec<ValidatorInfoResponse>>,
+    /// Application reference for tx validation (optional for backward compatibility).
+    pub app: Option<Arc<dyn Application>>,
 }
 
 /// Simple JSON-RPC server over TCP (one JSON object per line)
@@ -73,11 +78,21 @@ impl RpcServer {
                     tokio::spawn(async move {
                         let _permit = permit;
                         let (reader, mut writer) = stream.into_split();
-                        let mut lines = BufReader::with_capacity(65_536, reader).lines();
-                        while let Ok(Some(line)) = timeout(RPC_READ_TIMEOUT, lines.next_line())
+                        let mut reader = BufReader::with_capacity(65_536, reader);
+                        loop {
+                            let line = match timeout(
+                                RPC_READ_TIMEOUT,
+                                read_line_limited(&mut reader, MAX_LINE_BYTES),
+                            )
                             .await
-                            .unwrap_or(Ok(None))
-                        {
+                            {
+                                Ok(Ok(Some(line))) => line,
+                                Ok(Err(e)) => {
+                                    warn!(error = %e, "RPC read error (line too long?)");
+                                    break;
+                                }
+                                _ => break, // EOF or timeout
+                            };
                             let response = handle_request(&state, &line).await;
                             let mut json = serde_json::to_string(&response).unwrap_or_default();
                             json.push('\n');
@@ -130,6 +145,16 @@ async fn handle_request(state: &RpcState, line: &str) -> RpcResponse {
                     return RpcResponse::err(req.id, -32602, "invalid hex".to_string());
                 }
             };
+            // Validate via Application if available
+            if let Some(ref app) = state.app
+                && !app.validate_tx(&tx_bytes, None)
+            {
+                return RpcResponse::err(
+                    req.id,
+                    -32602,
+                    "transaction validation failed".to_string(),
+                );
+            }
             let accepted = state.mempool.add_tx(tx_bytes).await;
             json_ok(req.id, &TxResult { accepted })
         }
@@ -234,4 +259,40 @@ fn hex_to_block_hash(s: &str) -> Option<BlockHash> {
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&bytes);
     Some(BlockHash(arr))
+}
+
+/// Read a line from `reader`, failing fast if it exceeds `max_bytes`.
+///
+/// Uses `fill_buf` + incremental scanning so memory allocation is bounded.
+/// Returns `Ok(None)` on EOF, `Ok(Some(line))` on success, or an error
+/// if the line exceeds the limit.
+async fn read_line_limited<R: AsyncBufReadExt + Unpin>(
+    reader: &mut R,
+    max_bytes: usize,
+) -> std::io::Result<Option<String>> {
+    let mut buf = Vec::new();
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            return if buf.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
+            };
+        }
+        if let Some(pos) = available.iter().position(|&b| b == b'\n') {
+            buf.extend_from_slice(&available[..pos]);
+            reader.consume(pos + 1);
+            return Ok(Some(String::from_utf8_lossy(&buf).into_owned()));
+        }
+        let to_consume = available.len();
+        buf.extend_from_slice(available);
+        reader.consume(to_consume);
+        if buf.len() > max_bytes {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "line too long",
+            ));
+        }
+    }
 }

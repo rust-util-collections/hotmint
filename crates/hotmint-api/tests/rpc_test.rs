@@ -23,6 +23,7 @@ async fn setup_server() -> (String, tokio::task::JoinHandle<()>) {
         store,
         peer_info_rx,
         validator_set_rx,
+        app: None,
     };
 
     let server = RpcServer::bind("127.0.0.1:0", state).await.unwrap();

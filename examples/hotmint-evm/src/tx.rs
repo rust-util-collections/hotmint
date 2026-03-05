@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 ///
 /// Uses CBOR encoding for simplicity. Production chains may use full
 /// Ethereum RLP-encoded signed transactions instead.
+///
+/// Includes a dummy 65-byte ECDSA signature field so that serialized size
+/// (~110-120 bytes for a plain transfer) approximates real Ethereum transactions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvmTx {
     pub from: [u8; 20],
@@ -12,6 +15,8 @@ pub struct EvmTx {
     pub nonce: u64,
     pub gas_limit: u64,
     pub data: Vec<u8>,
+    /// Dummy ECDSA signature (r ‖ s ‖ v, 65 bytes). Not verified.
+    pub signature: Vec<u8>,
 }
 
 impl EvmTx {
@@ -24,6 +29,7 @@ impl EvmTx {
             nonce,
             gas_limit: 21_000,
             data: vec![],
+            signature: vec![0xAB; 65],
         }
     }
 
@@ -43,6 +49,7 @@ impl EvmTx {
             nonce,
             gas_limit,
             data,
+            signature: vec![0xAB; 65],
         }
     }
 

@@ -58,6 +58,19 @@ pub struct SlashResult {
     pub jailed: bool,
 }
 
+/// An entry in the unbonding queue.
+///
+/// When a delegator undelegates, voting power is reduced immediately but
+/// the tokens are locked until `completion_height` to prevent slash evasion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnbondingEntry {
+    pub staker: Vec<u8>,
+    pub validator: ValidatorId,
+    pub amount: u64,
+    /// Block height at which the unbonding completes.
+    pub completion_height: u64,
+}
+
 /// Staking system configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StakingConfig {
@@ -77,6 +90,8 @@ pub struct StakingConfig {
     pub max_score: u32,
     /// Block reward (added to proposer's self-stake).
     pub block_reward: u64,
+    /// Unbonding period in blocks. 0 = instant (legacy behavior).
+    pub unbonding_period: u64,
 }
 
 impl Default for StakingConfig {
@@ -90,6 +105,7 @@ impl Default for StakingConfig {
             initial_score: 10_000,
             max_score: 10_000,
             block_reward: 100,
+            unbonding_period: 1000,
         }
     }
 }
