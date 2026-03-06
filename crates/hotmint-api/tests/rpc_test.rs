@@ -25,7 +25,14 @@ async fn setup_server() -> (String, tokio::task::JoinHandle<()>) {
         app: None,
     };
 
-    let server = RpcServer::bind("127.0.0.1:0", state).await.unwrap();
+    // Probe IPv4 loopback; fall back to IPv6 (e.g. FreeBSD without IPv4 on lo0)
+    let bind_addr = if tokio::net::TcpListener::bind("127.0.0.1:0").await.is_ok() {
+        "127.0.0.1:0"
+    } else {
+        "[::1]:0"
+    };
+
+    let server = RpcServer::bind(bind_addr, state).await.unwrap();
     let addr = format!("{}", server.local_addr());
     let handle = tokio::spawn(async move { server.run().await });
 
