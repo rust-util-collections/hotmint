@@ -7,16 +7,6 @@
 
 A Rust BFT consensus framework combining Tendermint's engineering ergonomics with HotStuff-2's protocol efficiency.
 
-| Feature | Progress | Status |
-|:--------|:---------|:-------|
-| Core Types & Crypto | 5/5 | ✅ |
-| Persistent Storage | 3/3 | ✅ |
-| P2P Networking | 4/4 | ✅ |
-| Full Pacemaker | 4/4 | ✅ |
-| Production Hardening | 3/3 | ✅ |
-| Application Framework | 3/3 | ✅ |
-| **Total** | **22/22** | **100%** |
-
 ## Design Goals
 
 Hotmint is a BFT consensus framework built from scratch. It retains the clean, modular architecture of Tendermint while adopting HotStuff-2's two-chain commit protocol for lower confirmation latency and simpler view-change mechanics.
