@@ -1,5 +1,5 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use hotmint_crypto::{Ed25519Signer, Ed25519Verifier, hash_block};
+use hotmint_crypto::{Ed25519Signer, Ed25519Verifier, compute_block_hash};
 use hotmint_types::validator::{ValidatorId, ValidatorInfo, ValidatorSet};
 use hotmint_types::{Block, BlockHash, Height, Signer, Verifier, ViewNumber};
 
@@ -40,12 +40,12 @@ fn bench_verify(c: &mut Criterion) {
 fn bench_hash_block(c: &mut Criterion) {
     let block = make_block(256);
     c.bench_function("blake3_hash_block_256b", |b| {
-        b.iter(|| hash_block(black_box(&block)))
+        b.iter(|| compute_block_hash(black_box(&block)))
     });
 
     let large_block = make_block(65536);
     c.bench_function("blake3_hash_block_64kb", |b| {
-        b.iter(|| hash_block(black_box(&large_block)))
+        b.iter(|| compute_block_hash(black_box(&large_block)))
     });
 }
 

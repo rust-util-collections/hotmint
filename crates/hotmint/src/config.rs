@@ -157,8 +157,7 @@ impl GenesisDoc {
                 })
             })
             .collect();
-        let mut vs = ValidatorSet::new(infos?);
-        vs.rebuild_index();
+        let vs = ValidatorSet::new(infos?);
         Ok(vs)
     }
 }
@@ -206,13 +205,79 @@ impl PrivValidatorKey {
     }
 
     pub fn to_litep2p_keypair(&self) -> Result<litep2p::crypto::ed25519::Keypair> {
-        let bytes = hex::decode(&self.private_key).c(d!("decode private key hex"))?;
-        let seed: [u8; 32] = bytes
-            .try_into()
-            .map_err(|_| eg!("private key must be 32 bytes"))?;
-        let secret = litep2p::crypto::ed25519::SecretKey::try_from_bytes(seed)
-            .c(d!("create litep2p secret key"))?;
-        Ok(litep2p::crypto::ed25519::Keypair::from(secret))
+        litep2p_keypair_from_hex(&self.private_key)
+    }
+
+    /// Derive the litep2p PeerId from the public key.
+    pub fn peer_id(&self) -> Result<litep2p::PeerId> {
+        peer_id_from_hex(&self.public_key)
+    }
+}
+
+// ── Shared litep2p key helpers ─────────────────────────────────────
+
+fn litep2p_keypair_from_hex(private_key_hex: &str) -> Result<litep2p::crypto::ed25519::Keypair> {
+    let bytes = hex::decode(private_key_hex).c(d!("decode private key hex"))?;
+    let seed: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| eg!("private key must be 32 bytes"))?;
+    let secret = litep2p::crypto::ed25519::SecretKey::try_from_bytes(seed)
+        .c(d!("create litep2p secret key"))?;
+    Ok(litep2p::crypto::ed25519::Keypair::from(secret))
+}
+
+fn peer_id_from_hex(public_key_hex: &str) -> Result<litep2p::PeerId> {
+    let pk_bytes = hex::decode(public_key_hex).c(d!("decode public key hex"))?;
+    let lpk = litep2p::crypto::ed25519::PublicKey::try_from_bytes(&pk_bytes)
+        .c(d!("invalid ed25519 public key"))?;
+    Ok(lpk.to_peer_id())
+}
+
+// ── node_key.json ─────────────────────────────────────────────────
+
+/// Ed25519 keypair for P2P node identity (separate from the validator signing key).
+///
+/// The node key determines the litep2p `PeerId` used in P2P networking.
+/// It is independent of the validator key so that a node operator can
+/// rotate P2P identity without affecting consensus participation.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NodeKey {
+    /// Hex-encoded ed25519 public key (32 bytes → 64 hex chars).
+    pub public_key: String,
+    /// Hex-encoded 32-byte ed25519 seed (private key).
+    pub private_key: String,
+}
+
+impl NodeKey {
+    /// Generate a new random Ed25519 keypair for node identity.
+    pub fn generate() -> Self {
+        let mut rng = rand::thread_rng();
+        let signing_key = SigningKey::generate(&mut rng);
+        let public_key = signing_key.verifying_key();
+        Self {
+            public_key: hex::encode(public_key.to_bytes()),
+            private_key: hex::encode(signing_key.to_bytes()),
+        }
+    }
+
+    pub fn load(path: &Path) -> Result<Self> {
+        let contents = std::fs::read_to_string(path).c(d!("read node_key.json"))?;
+        serde_json::from_str(&contents).c(d!("parse node_key.json"))
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        let contents = serde_json::to_string_pretty(self).c(d!("serialize node_key.json"))?;
+        std::fs::write(path, contents).c(d!("write node_key.json"))
+    }
+
+    /// Convert to a litep2p Ed25519 keypair for P2P networking.
+    pub fn to_litep2p_keypair(&self) -> Result<litep2p::crypto::ed25519::Keypair> {
+        litep2p_keypair_from_hex(&self.private_key)
+    }
+
+    /// Derive the litep2p PeerId from the public key.
+    pub fn peer_id(&self) -> Result<litep2p::PeerId> {
+        peer_id_from_hex(&self.public_key)
     }
 }
 
@@ -244,6 +309,11 @@ pub fn init_node_dir(home: &Path) -> Result<()> {
     let priv_key_path = config_dir.join("priv_validator_key.json");
     priv_key.save(&priv_key_path)?;
 
+    // Generate node key (P2P identity)
+    let node_key = NodeKey::generate();
+    let node_key_path = config_dir.join("node_key.json");
+    node_key.save(&node_key_path)?;
+
     // Create genesis with this single validator
     let genesis = GenesisDoc {
         chain_id: "hotmint-localnet".into(),
@@ -262,6 +332,10 @@ pub fn init_node_dir(home: &Path) -> Result<()> {
     println!("Initialized hotmint node directory: {}", home.display());
     println!("  Validator ID:  {}", priv_key.validator_id);
     println!("  Public key:    {}", priv_key.public_key);
+    println!("  Node key:      {}", node_key.public_key);
+    if let Ok(pid) = node_key.peer_id() {
+        println!("  Peer ID:       {}", pid);
+    }
     println!(
         "  Config:        {}",
         config_dir.join("config.toml").display()
@@ -271,6 +345,7 @@ pub fn init_node_dir(home: &Path) -> Result<()> {
         config_dir.join("genesis.json").display()
     );
     println!("  Validator key: {}", priv_key_path.display());
+    println!("  Node key file: {}", node_key_path.display());
     println!("  Data dir:      {}", data_dir.display());
 
     Ok(())

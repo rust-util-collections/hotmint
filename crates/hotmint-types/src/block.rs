@@ -72,6 +72,21 @@ impl Block {
             hash: BlockHash::GENESIS,
         }
     }
+
+    /// Compute the Blake3 hash of this block's content and return it.
+    ///
+    /// This hashes `height || parent_hash || view || proposer || payload`
+    /// (excluding the `hash` field itself).
+    pub fn compute_hash(&self) -> BlockHash {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&self.height.as_u64().to_le_bytes());
+        hasher.update(&self.parent_hash.0);
+        hasher.update(&self.view.as_u64().to_le_bytes());
+        hasher.update(&self.proposer.0.to_le_bytes());
+        hasher.update(&self.payload);
+        let hash = hasher.finalize();
+        BlockHash(*hash.as_bytes())
+    }
 }
 
 mod hex {

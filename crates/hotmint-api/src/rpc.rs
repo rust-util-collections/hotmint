@@ -21,14 +21,39 @@ const RPC_READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// Maximum bytes per RPC line. Prevents OOM from clients sending huge data without newlines.
 const MAX_LINE_BYTES: usize = 1_048_576;
 
-/// Status tuple: (current_view, last_committed_height, epoch_number, validator_count, epoch_start_view)
-pub type StatusTuple = (u64, u64, u64, usize, u64);
+/// Named consensus status shared via watch channel.
+#[derive(Debug, Clone, Copy)]
+pub struct ConsensusStatus {
+    pub current_view: u64,
+    pub last_committed_height: u64,
+    pub epoch_number: u64,
+    pub validator_count: usize,
+    pub epoch_start_view: u64,
+}
+
+impl ConsensusStatus {
+    pub fn new(
+        current_view: u64,
+        last_committed_height: u64,
+        epoch_number: u64,
+        validator_count: usize,
+        epoch_start_view: u64,
+    ) -> Self {
+        Self {
+            current_view,
+            last_committed_height,
+            epoch_number,
+            validator_count,
+            epoch_start_view,
+        }
+    }
+}
 
 /// Shared state accessible by the RPC server
 pub struct RpcState {
     pub validator_id: u64,
     pub mempool: Arc<Mempool>,
-    pub status_rx: watch::Receiver<StatusTuple>,
+    pub status_rx: watch::Receiver<ConsensusStatus>,
     /// Shared block store for block queries
     pub store: Arc<RwLock<Box<dyn BlockStore>>>,
     /// Peer info channel
@@ -120,13 +145,13 @@ async fn handle_request(state: &RpcState, line: &str) -> RpcResponse {
 
     match req.method.as_str() {
         "status" => {
-            let (view, height, epoch, validator_count, _) = *state.status_rx.borrow();
+            let s = *state.status_rx.borrow();
             let info = StatusInfo {
                 validator_id: state.validator_id,
-                current_view: view,
-                last_committed_height: height,
-                epoch,
-                validator_count,
+                current_view: s.current_view,
+                last_committed_height: s.last_committed_height,
+                epoch: s.epoch_number,
+                validator_count: s.validator_count,
                 mempool_size: state.mempool.size().await,
             };
             json_ok(req.id, &info)
@@ -201,11 +226,11 @@ async fn handle_request(state: &RpcState, line: &str) -> RpcResponse {
         }
 
         "get_epoch" => {
-            let (_, _, epoch, validator_count, start_view) = *state.status_rx.borrow();
+            let s = *state.status_rx.borrow();
             let info = EpochInfo {
-                number: epoch,
-                start_view,
-                validator_count,
+                number: s.epoch_number,
+                start_view: s.epoch_start_view,
+                validator_count: s.validator_count,
             };
             json_ok(req.id, &info)
         }

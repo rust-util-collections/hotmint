@@ -60,6 +60,150 @@ pub struct EngineConfig {
     pub persistence: Option<Box<dyn StatePersistence>>,
 }
 
+impl EngineConfig {
+    /// Create an `EngineConfig` with the given verifier and defaults
+    /// (no custom pacemaker, no persistence).
+    pub fn new(verifier: Box<dyn Verifier>) -> Self {
+        Self {
+            verifier,
+            pacemaker: None,
+            persistence: None,
+        }
+    }
+
+    /// Set a custom pacemaker configuration.
+    pub fn with_pacemaker(mut self, pacemaker: PacemakerConfig) -> Self {
+        self.pacemaker = Some(pacemaker);
+        self
+    }
+
+    /// Set a state persistence backend.
+    pub fn with_persistence(mut self, persistence: Box<dyn StatePersistence>) -> Self {
+        self.persistence = Some(persistence);
+        self
+    }
+}
+
+/// Builder for constructing a `ConsensusEngine` with a fluent API.
+///
+/// # Example
+/// ```rust,ignore
+/// let engine = ConsensusEngineBuilder::new()
+///     .state(state)
+///     .store(store)
+///     .network(network)
+///     .app(app)
+///     .signer(signer)
+///     .messages(msg_rx)
+///     .verifier(verifier)
+///     .build()
+///     .expect("all required fields must be set");
+/// ```
+pub struct ConsensusEngineBuilder {
+    state: Option<ConsensusState>,
+    store: Option<SharedBlockStore>,
+    network: Option<Box<dyn NetworkSink>>,
+    app: Option<Box<dyn Application>>,
+    signer: Option<Box<dyn Signer>>,
+    msg_rx: Option<mpsc::Receiver<(ValidatorId, ConsensusMessage)>>,
+    verifier: Option<Box<dyn Verifier>>,
+    pacemaker: Option<PacemakerConfig>,
+    persistence: Option<Box<dyn StatePersistence>>,
+}
+
+impl ConsensusEngineBuilder {
+    pub fn new() -> Self {
+        Self {
+            state: None,
+            store: None,
+            network: None,
+            app: None,
+            signer: None,
+            msg_rx: None,
+            verifier: None,
+            pacemaker: None,
+            persistence: None,
+        }
+    }
+
+    pub fn state(mut self, state: ConsensusState) -> Self {
+        self.state = Some(state);
+        self
+    }
+
+    pub fn store(mut self, store: SharedBlockStore) -> Self {
+        self.store = Some(store);
+        self
+    }
+
+    pub fn network(mut self, network: Box<dyn NetworkSink>) -> Self {
+        self.network = Some(network);
+        self
+    }
+
+    pub fn app(mut self, app: Box<dyn Application>) -> Self {
+        self.app = Some(app);
+        self
+    }
+
+    pub fn signer(mut self, signer: Box<dyn Signer>) -> Self {
+        self.signer = Some(signer);
+        self
+    }
+
+    pub fn messages(mut self, msg_rx: mpsc::Receiver<(ValidatorId, ConsensusMessage)>) -> Self {
+        self.msg_rx = Some(msg_rx);
+        self
+    }
+
+    pub fn verifier(mut self, verifier: Box<dyn Verifier>) -> Self {
+        self.verifier = Some(verifier);
+        self
+    }
+
+    pub fn pacemaker(mut self, config: PacemakerConfig) -> Self {
+        self.pacemaker = Some(config);
+        self
+    }
+
+    pub fn persistence(mut self, persistence: Box<dyn StatePersistence>) -> Self {
+        self.persistence = Some(persistence);
+        self
+    }
+
+    pub fn build(self) -> ruc::Result<ConsensusEngine> {
+        let state = self.state.ok_or_else(|| ruc::eg!("state is required"))?;
+        let store = self.store.ok_or_else(|| ruc::eg!("store is required"))?;
+        let network = self
+            .network
+            .ok_or_else(|| ruc::eg!("network is required"))?;
+        let app = self.app.ok_or_else(|| ruc::eg!("app is required"))?;
+        let signer = self.signer.ok_or_else(|| ruc::eg!("signer is required"))?;
+        let msg_rx = self
+            .msg_rx
+            .ok_or_else(|| ruc::eg!("messages (msg_rx) is required"))?;
+        let verifier = self
+            .verifier
+            .ok_or_else(|| ruc::eg!("verifier is required"))?;
+
+        let config = EngineConfig {
+            verifier,
+            pacemaker: self.pacemaker,
+            persistence: self.persistence,
+        };
+
+        Ok(ConsensusEngine::new(
+            state, store, network, app, signer, msg_rx, config,
+        ))
+    }
+}
+
+impl Default for ConsensusEngineBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConsensusEngine {
     pub fn new(
         state: ConsensusState,
@@ -446,7 +590,7 @@ impl ConsensusEngine {
                     // the parent chain would fail with "block not found".
                     if block.height > self.state.last_committed_height {
                         // Verify block hash before storing past-view blocks
-                        let expected = hotmint_crypto::hash_block(&block);
+                        let expected = hotmint_crypto::compute_block_hash(&block);
                         if block.hash == expected {
                             let mut store = self.store.write().unwrap();
                             store.put_block(block);

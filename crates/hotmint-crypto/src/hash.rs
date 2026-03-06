@@ -1,14 +1,11 @@
 use hotmint_types::{Block, BlockHash};
 
-pub fn hash_block(block: &Block) -> BlockHash {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(&block.height.as_u64().to_le_bytes());
-    hasher.update(&block.parent_hash.0);
-    hasher.update(&block.view.as_u64().to_le_bytes());
-    hasher.update(&block.proposer.0.to_le_bytes());
-    hasher.update(&block.payload);
-    let hash = hasher.finalize();
-    BlockHash(*hash.as_bytes())
+/// Compute the Blake3 hash of a block's content fields.
+///
+/// Hashes `height || parent_hash || view || proposer || payload`,
+/// deliberately excluding `block.hash` to avoid circularity.
+pub fn compute_block_hash(block: &Block) -> BlockHash {
+    block.compute_hash()
 }
 
 #[cfg(test)]
@@ -26,8 +23,8 @@ mod tests {
             payload: b"hello".to_vec(),
             hash: BlockHash::GENESIS,
         };
-        let h1 = hash_block(&block);
-        let h2 = hash_block(&block);
+        let h1 = compute_block_hash(&block);
+        let h2 = compute_block_hash(&block);
         assert_eq!(h1, h2);
         assert!(!h1.is_genesis());
     }
@@ -50,6 +47,19 @@ mod tests {
             payload: b"b".to_vec(),
             hash: BlockHash::GENESIS,
         };
-        assert_ne!(hash_block(&b1), hash_block(&b2));
+        assert_ne!(compute_block_hash(&b1), compute_block_hash(&b2));
+    }
+
+    #[test]
+    fn test_block_compute_hash_matches() {
+        let block = Block {
+            height: Height(1),
+            parent_hash: BlockHash::GENESIS,
+            view: ViewNumber(1),
+            proposer: ValidatorId(0),
+            payload: b"hello".to_vec(),
+            hash: BlockHash::GENESIS,
+        };
+        assert_eq!(compute_block_hash(&block), block.compute_hash());
     }
 }

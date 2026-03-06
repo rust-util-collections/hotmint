@@ -25,6 +25,7 @@ hotmint-network = { workspace = true }
 hotmint-mempool = { workspace = true }
 hotmint-abci = { workspace = true }
 hotmint-api = { workspace = true }
+hotmint-staking = { workspace = true }
 
 tokio = { workspace = true }
 tracing = { workspace = true }

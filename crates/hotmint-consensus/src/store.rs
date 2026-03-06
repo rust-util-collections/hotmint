@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, RwLock};
 
 use hotmint_types::{Block, BlockHash, Height, QuorumCertificate};
 
@@ -59,6 +60,12 @@ impl MemoryBlockStore {
         let genesis = Block::genesis();
         store.put_block(genesis);
         store
+    }
+
+    /// Create a new in-memory block store wrapped in `Arc<RwLock<Box<dyn BlockStore>>>`,
+    /// ready for use with `ConsensusEngine`.
+    pub fn new_shared() -> crate::engine::SharedBlockStore {
+        Arc::new(RwLock::new(Box::new(Self::new())))
     }
 }
 

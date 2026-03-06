@@ -1,11 +1,10 @@
-use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use hotmint_abci::client::IpcApplicationClient;
 use hotmint_abci::server::{ApplicationHandler, IpcApplicationServer};
-use hotmint_consensus::engine::{ConsensusEngine, EngineConfig};
+use hotmint_consensus::engine::ConsensusEngineBuilder;
 use hotmint_consensus::network::ChannelNetwork;
 use hotmint_consensus::pacemaker::PacemakerConfig;
 use hotmint_consensus::state::ConsensusState;
@@ -14,7 +13,6 @@ use hotmint_crypto::{Ed25519Signer, Ed25519Verifier};
 use hotmint_types::context::OwnedBlockContext;
 use hotmint_types::validator_update::EndBlockResponse;
 use hotmint_types::*;
-use tokio::sync::mpsc;
 
 const NUM_VALIDATORS: u64 = 4;
 const DURATION_SECS: u64 = 10;
@@ -55,7 +53,7 @@ async fn run_bench(label: &str, base_timeout_ms: u64) {
 
     let commit_count = Arc::new(AtomicU64::new(0));
 
-    // Start one IPC server per validator (server handles one connection at a time)
+    // Start one IPC server per validator
     let mut sock_paths = Vec::new();
     let mut server_handles = Vec::new();
     for i in 0..NUM_VALIDATORS {
@@ -73,68 +71,48 @@ async fn run_bench(label: &str, base_timeout_ms: u64) {
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    // Create validators
     let signers: Vec<Ed25519Signer> = (0..NUM_VALIDATORS)
         .map(|i| Ed25519Signer::generate(ValidatorId(i)))
         .collect();
-    let validator_infos: Vec<ValidatorInfo> = signers
-        .iter()
-        .map(|s| ValidatorInfo {
-            id: Signer::validator_id(s),
-            public_key: Signer::public_key(s),
-            power: 1,
-        })
-        .collect();
-    let validator_set = ValidatorSet::new(validator_infos);
 
-    let mut receivers = HashMap::new();
-    let mut all_senders: HashMap<ValidatorId, mpsc::Sender<(ValidatorId, ConsensusMessage)>> =
-        HashMap::new();
-    for i in 0..NUM_VALIDATORS {
-        let (tx, rx) = mpsc::channel(8192);
-        receivers.insert(ValidatorId(i), rx);
-        all_senders.insert(ValidatorId(i), tx);
-    }
+    let signer_refs: Vec<&dyn Signer> = signers.iter().map(|s| s as &dyn Signer).collect();
+    let validator_set = ValidatorSet::from_signers(&signer_refs);
+
+    let mesh = ChannelNetwork::create_mesh(NUM_VALIDATORS);
+    assert_eq!(
+        mesh.len(),
+        signers.len(),
+        "mesh and signers must have the same length"
+    );
 
     let mut commit_counters = Vec::new();
     let mut handles = Vec::new();
 
-    for (i, signer) in signers.into_iter().enumerate() {
+    for (i, ((network, rx), signer)) in mesh.into_iter().zip(signers.into_iter()).enumerate() {
         let vid = ValidatorId(i as u64);
-        let rx = receivers.remove(&vid).unwrap();
-        let senders: Vec<_> = all_senders
-            .iter()
-            .map(|(&id, tx)| (id, tx.clone()))
-            .collect();
 
         let per_node_commits = Arc::new(AtomicU64::new(0));
         commit_counters.push(per_node_commits.clone());
 
-        // Connect to this validator's IPC server
         let ipc_client = IpcApplicationClient::new(&sock_paths[i]);
-
-        let network = ChannelNetwork::new(vid, senders);
-        let store: Arc<RwLock<Box<dyn hotmint_consensus::store::BlockStore>>> =
-            Arc::new(RwLock::new(Box::new(MemoryBlockStore::new())));
+        let store = MemoryBlockStore::new_shared();
         let state = ConsensusState::new(vid, validator_set.clone());
 
-        let engine = ConsensusEngine::new(
-            state,
-            store,
-            Box::new(network),
-            Box::new(ipc_client),
-            Box::new(signer),
-            rx,
-            EngineConfig {
-                verifier: Box::new(Ed25519Verifier),
-                pacemaker: Some(PacemakerConfig {
-                    base_timeout_ms,
-                    max_timeout_ms: base_timeout_ms * 15,
-                    backoff_multiplier: 1.5,
-                }),
-                persistence: None,
-            },
-        );
+        let engine = ConsensusEngineBuilder::new()
+            .state(state)
+            .store(store)
+            .network(Box::new(network))
+            .app(Box::new(ipc_client))
+            .signer(Box::new(signer))
+            .messages(rx)
+            .verifier(Box::new(Ed25519Verifier))
+            .pacemaker(PacemakerConfig {
+                base_timeout_ms,
+                max_timeout_ms: base_timeout_ms * 15,
+                backoff_multiplier: 1.5,
+            })
+            .build()
+            .expect("all required fields set");
 
         handles.push(tokio::spawn(async move { engine.run().await }));
     }

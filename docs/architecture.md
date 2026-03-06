@@ -57,7 +57,7 @@ Concrete cryptographic implementations:
 
 - `Ed25519Signer` — implements the `Signer` trait using ed25519-dalek
 - `Ed25519Verifier` — implements the `Verifier` trait
-- `hash_block()` — Blake3 block hashing
+- `compute_block_hash()` — Blake3 block hashing
 
 ### hotmint-consensus
 

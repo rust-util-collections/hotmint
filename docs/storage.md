@@ -1,71 +1,71 @@
 # Storage
 
-Hotmint 提供两种 `BlockStore` 实现和一个 `PersistentConsensusState`，分别用于区块持久化和共识状态的崩溃恢复。
+Hotmint provides two `BlockStore` implementations and a `PersistentConsensusState` for block persistence and consensus state crash recovery, respectively.
 
-| 组件 | 用途 | 后端 |
-|:-----|:-----|:-----|
-| `MemoryBlockStore` | 开发 / 测试 | HashMap + BTreeMap |
-| `VsdbBlockStore` | 生产环境 | vsdb MapxOrd |
-| `PersistentConsensusState` | 共识状态崩溃恢复 | vsdb MapxOrd |
+| Component | Purpose | Backend |
+|:----------|:--------|:--------|
+| `MemoryBlockStore` | Development / testing | HashMap + BTreeMap |
+| `VsdbBlockStore` | Production | vsdb MapxOrd |
+| `PersistentConsensusState` | Consensus state crash recovery | vsdb MapxOrd |
 
-## vsdb 简介
+## vsdb Overview
 
-[vsdb](https://crates.io/crates/vsdb) 是一个高性能嵌入式 KV 数据库，API 设计类似 Rust 标准集合（HashMap / BTreeMap），底层使用 MMDB（纯 Rust 内存映射数据库引擎），无 C 库依赖。
+[vsdb](https://crates.io/crates/vsdb) is a high-performance embedded key-value database whose API mirrors Rust standard collections (HashMap / BTreeMap). Under the hood it uses MMDB (a pure-Rust memory-mapped database engine) with no C library dependencies.
 
-### 核心类型
+### Core Types
 
-Hotmint 使用的 vsdb v10.x 核心类型：
+Core vsdb v10.x types used by Hotmint:
 
-| 类型 | 说明 | 类比 |
-|:-----|:-----|:-----|
-| `MapxOrd<K, V>` | 有序 KV 存储 | `BTreeMap<K, V>` |
-| `Mapx<K, V>` | 无序 KV 存储 | `HashMap<K, V>` |
-| `Orphan<T>` | 单值持久化容器 | `Box<T>` on disk |
+| Type | Description | Rust Equivalent |
+|:-----|:------------|:----------------|
+| `MapxOrd<K, V>` | Ordered KV store | `BTreeMap<K, V>` |
+| `Mapx<K, V>` | Unordered KV store | `HashMap<K, V>` |
+| `Orphan<T>` | Single-value persistent container | `Box<T>` on disk |
 
-`MapxOrd` 的常用方法：
+Common `MapxOrd` methods:
 
 ```rust
-// 创建
+// Create
 let mut map: MapxOrd<u64, String> = MapxOrd::new();
 
-// 写入
+// Write
 map.insert(&1, &"hello".into());
 
-// 读取
+// Read
 let val: Option<String> = map.get(&1);
 let exists: bool = map.contains_key(&1);
 
-// 范围查询
+// Range queries
 let first: Option<(u64, String)> = map.first();
 let last: Option<(u64, String)> = map.last();
-let le: Option<(u64, String)> = map.get_le(&5);  // 最后一个 ≤ 5 的
-let ge: Option<(u64, String)> = map.get_ge(&5);  // 第一个 ≥ 5 的
+let le: Option<(u64, String)> = map.get_le(&5);  // last entry ≤ 5
+let ge: Option<(u64, String)> = map.get_ge(&5);  // first entry ≥ 5
 
-// 迭代
+// Iteration
 for (k, v) in map.iter() { /* ... */ }
 for (k, v) in map.range(10..20) { /* ... */ }
 
-// 删除
+// Delete
 map.remove(&1);
 map.clear();
 ```
 
-### 序列化要求
+### Serialization Requirements
 
-- Key 需实现 `KeyEnDeOrdered`（有序编码）
-- Value 需实现 `ValueEnDe`
-- 实现了 serde `Serialize + Deserialize` 的类型自动满足上述要求
+- Keys must implement `KeyEnDeOrdered` (ordered encoding)
+- Values must implement `ValueEnDe`
+- Any type implementing serde `Serialize + Deserialize` automatically satisfies both requirements
 
-### 关键函数
+### Key Functions
 
 ```rust
-// 设置数据目录（必须在任何 vsdb 操作之前调用，仅能调用一次）
+// Set the data directory (must be called before any vsdb operation; can only be called once)
 vsdb::vsdb_set_base_dir("/var/lib/hotmint/data").unwrap();
 
-// 获取当前数据目录
+// Get the current data directory
 let dir = vsdb::vsdb_get_base_dir();
 
-// 强制刷盘
+// Force flush to disk
 vsdb::vsdb_flush();
 ```
 
@@ -85,43 +85,50 @@ pub trait BlockStore: Send + Sync {
 }
 ```
 
-trait 返回 owned `Block` 值（非引用），因为 vsdb 数据存储在磁盘上，无法返回内存中的借用引用。这一设计使内存和持久化实现使用同一接口。
+The trait returns owned `Block` values (not references) because vsdb stores data on disk and cannot hand out borrowed references into memory. This design lets in-memory and persistent implementations share the same interface.
 
 ## MemoryBlockStore
 
-内存实现，适用于测试、开发和短生命周期进程。
+An in-memory implementation suited for testing, development, and short-lived processes.
 
 ```rust
 use hotmint::consensus::store::MemoryBlockStore;
 
 let store = MemoryBlockStore::new();
-// 自动包含 height 0 的 genesis block
+// Automatically includes the genesis block at height 0
 ```
 
-内部结构：
-- `by_hash: HashMap<BlockHash, Block>` — O(1) 哈希查找
-- `by_height: BTreeMap<u64, BlockHash>` — 有序高度查找
+For convenience, a thread-safe shared instance can be created in one step:
+
+```rust
+let shared_store = MemoryBlockStore::new_shared();
+// Returns Arc<RwLock<Box<dyn BlockStore>>>
+```
+
+Internal structure:
+- `by_hash: HashMap<BlockHash, Block>` — O(1) hash lookup
+- `by_height: BTreeMap<u64, BlockHash>` — ordered height lookup
 
 ## VsdbBlockStore
 
-持久化区块存储，基于 vsdb `MapxOrd`。区块在进程重启后仍然存在。
+A persistent block store backed by vsdb `MapxOrd`. Blocks survive process restarts.
 
 ```rust
 use hotmint::storage::block_store::VsdbBlockStore;
 
 let store = VsdbBlockStore::new();
-// 自动包含 genesis block
+// Automatically includes the genesis block
 
-// 检查区块是否存在
+// Check whether a block exists
 if store.contains(&block_hash) {
     // ...
 }
 
-// 显式刷盘
+// Explicitly flush to disk
 store.flush();
 ```
 
-### 内部数据模型
+### Internal Data Model
 
 ```rust
 pub struct VsdbBlockStore {
@@ -130,49 +137,45 @@ pub struct VsdbBlockStore {
 }
 ```
 
-两个索引协同工作：
-- `put_block()` 同时写入两个 map
-- `get_block()` 直接从 `by_hash` 查找
-- `get_block_by_height()` 先从 `by_height` 查到 hash，再从 `by_hash` 取 block
+The two indexes work together:
+- `put_block()` writes to both maps
+- `get_block()` looks up directly in `by_hash`
+- `get_block_by_height()` resolves the hash via `by_height`, then fetches the block from `by_hash`
 
-### 在 ConsensusEngine 中使用
+### Using with ConsensusEngine
 
 ```rust
 use std::sync::{Arc, RwLock};
-use hotmint::consensus::engine::{EngineConfig, SharedBlockStore};
+use hotmint::consensus::engine::SharedBlockStore;
 use hotmint::crypto::Ed25519Verifier;
 
 let store: SharedBlockStore =
     Arc::new(RwLock::new(Box::new(VsdbBlockStore::new())));
 
-let engine = ConsensusEngine::new(
-    state,
-    store,  // SharedBlockStore = Arc<RwLock<Box<dyn BlockStore>>>
-    Box::new(network_sink),
-    Box::new(app),
-    Box::new(signer),
-    msg_rx,
-    EngineConfig {
-        verifier: Box::new(Ed25519Verifier),
-        pacemaker: None,
-        persistence: None,
-    },
-);
+let engine = ConsensusEngine::builder()
+    .state(state)
+    .block_store(store)        // SharedBlockStore = Arc<RwLock<Box<dyn BlockStore>>>
+    .network_sink(network_sink)
+    .application(app)
+    .signer(signer)
+    .message_receiver(msg_rx)
+    .verifier(Ed25519Verifier)
+    .build();
 ```
 
 ## PersistentConsensusState
 
-关键共识状态（view number、locked QC、highest QC、committed height、current epoch）必须在崩溃后恢复以维护安全性。
+Critical consensus state (view number, locked QC, highest QC, committed height, current epoch) must be recovered after a crash to maintain safety.
 
-### 内部数据模型
+### Internal Data Model
 
 ```rust
-// 使用单个 MapxOrd 存储多个状态字段
+// Multiple state fields stored in a single MapxOrd
 pub struct PersistentConsensusState {
     store: MapxOrd<u64, StateValue>,
 }
 
-// 状态值枚举（serde 序列化后存储）
+// State value enum (serialized via serde)
 enum StateValue {
     View(ViewNumber),
     Height(Height),
@@ -180,7 +183,7 @@ enum StateValue {
     Epoch(Epoch),
 }
 
-// 固定 key 常量
+// Fixed key constants
 const KEY_CURRENT_VIEW: u64 = 1;
 const KEY_LOCKED_QC: u64 = 2;
 const KEY_HIGHEST_QC: u64 = 3;
@@ -195,7 +198,7 @@ use hotmint::storage::consensus_state::PersistentConsensusState;
 
 let mut pstate = PersistentConsensusState::new();
 
-// 保存状态（通常在 view 切换或 commit 后调用）
+// Save state (typically called after view changes or commits)
 pstate.save_current_view(ViewNumber(42));
 pstate.save_locked_qc(&qc);
 pstate.save_highest_qc(&highest_qc);
@@ -203,7 +206,7 @@ pstate.save_last_committed_height(Height(10));
 pstate.save_current_epoch(&epoch);
 pstate.flush();
 
-// 加载状态（启动时 / 崩溃恢复）
+// Load state (at startup / crash recovery)
 let view = pstate.load_current_view();           // Option<ViewNumber>
 let locked = pstate.load_locked_qc();            // Option<QuorumCertificate>
 let highest = pstate.load_highest_qc();          // Option<QuorumCertificate>
@@ -211,7 +214,7 @@ let committed = pstate.load_last_committed_height(); // Option<Height>
 let epoch = pstate.load_current_epoch();         // Option<Epoch>
 ```
 
-### 崩溃恢复示例
+### Crash Recovery Example
 
 ```rust
 use hotmint::consensus::state::ConsensusState;
@@ -224,7 +227,7 @@ fn recover_or_init(vid: ValidatorId, vs: ValidatorSet) -> (ConsensusState, VsdbB
 
     let mut state = ConsensusState::new(vid, vs);
 
-    // 从持久化状态恢复
+    // Restore from persisted state
     if let Some(view) = pstate.load_current_view() {
         state.current_view = view;
     }
@@ -245,43 +248,43 @@ fn recover_or_init(vid: ValidatorId, vs: ValidatorSet) -> (ConsensusState, VsdbB
 }
 ```
 
-## 数据目录配置
+## Data Directory Configuration
 
-vsdb 默认将数据存储在进程工作目录下。有两种方式指定自定义路径：
+By default vsdb stores data in the process working directory. There are two ways to specify a custom path:
 
-### 环境变量
+### Environment Variable
 
 ```bash
 export VSDB_BASE_DIR=/var/lib/hotmint/data
 ```
 
-### 编程式配置
+### Programmatic Configuration
 
 ```rust
-// 必须在任何 vsdb 操作之前调用，且仅能调用一次
+// Must be called before any vsdb operation; can only be called once
 vsdb::vsdb_set_base_dir("/var/lib/hotmint/data").unwrap();
 ```
 
-`vsdb_set_base_dir()` 接受 `impl AsRef<Path>`，若数据库已初始化则返回错误。
+`vsdb_set_base_dir()` accepts `impl AsRef<Path>` and returns an error if the database has already been initialized.
 
-## Flush 语义
+## Flush Semantics
 
-vsdb 的写入操作默认异步落盘（由操作系统调度刷盘时机）。调用 `vsdb_flush()` 可以强制将所有待写入数据同步刷到磁盘。
+By default vsdb writes are flushed asynchronously (the OS decides when to persist). Calling `vsdb_flush()` forces all pending writes to be synchronously flushed to disk.
 
-建议在以下场景调用：
-- 关键共识状态变更后（view 切换、QC 更新、commit）
-- 应用层 `on_commit()` 完成后
-- 节点优雅关闭前
+Recommended flush points:
+- After critical consensus state changes (view switches, QC updates, commits)
+- After the application's `on_commit()` completes
+- Before a graceful node shutdown
 
-`VsdbBlockStore` 和 `PersistentConsensusState` 都提供了 `.flush()` 方法，内部调用 `vsdb::vsdb_flush()`。
+Both `VsdbBlockStore` and `PersistentConsensusState` expose a `.flush()` method that internally calls `vsdb::vsdb_flush()`.
 
-## vsdb 高级特性
+## Advanced vsdb Features
 
-vsdb v10.x 除了基础 KV 存储外，还提供以下高级特性，可用于 Hotmint 未来的功能扩展：
+Beyond basic KV storage, vsdb v10.x offers several advanced features that may be useful for future Hotmint extensions:
 
-### VerMap — 版本化存储
+### VerMap — Versioned Storage
 
-`VerMap` 实现 Git 模型的版本化存储，支持分支、提交、三路合并和回滚。
+`VerMap` provides Git-style versioned storage with support for branching, committing, three-way merging, and rollback.
 
 ```rust
 use vsdb::versioned::map::VerMap;
@@ -296,30 +299,30 @@ let feat = m.create_branch("feature", main)?;
 m.insert(feat, &1, &"updated".into())?;
 m.commit(feat)?;
 
-// 分支隔离变更
+// Branches isolate changes
 assert_eq!(m.get(main, &1)?, Some("hello".into()));
 assert_eq!(m.get(feat, &1)?, Some("updated".into()));
 
-// 三路合并
+// Three-way merge
 m.merge(feat, main)?;
 ```
 
-潜在用途：应用状态的乐观执行和回滚。
+Potential use case: optimistic execution and rollback of application state.
 
-### MptCalc / SmtCalc — Merkle 证明
+### MptCalc / SmtCalc — Merkle Proofs
 
-`MptCalc`（Merkle Patricia Trie）和 `SmtCalc`（Sparse Merkle Tree）提供无状态 Merkle 根计算和证明生成。
+`MptCalc` (Merkle Patricia Trie) and `SmtCalc` (Sparse Merkle Tree) provide stateless Merkle root computation and proof generation.
 
-`VerMapWithProof` 结合版本化存储和 Merkle 根计算，每次提交产生 32 字节的状态根。
+`VerMapWithProof` combines versioned storage with Merkle root computation, producing a 32-byte state root on each commit.
 
-潜在用途：
-- 轻客户端状态验证
-- 跨链状态证明
-- 应用层状态承诺
+Potential use cases:
+- Light client state verification
+- Cross-chain state proofs
+- Application-layer state commitments
 
-## 实现自定义 BlockStore
+## Implementing a Custom BlockStore
 
-要使用其他存储后端（如 SQLite、sled 或远程数据库）：
+To use a different storage backend (e.g., SQLite, sled, or a remote database):
 
 ```rust
 use hotmint::prelude::*;
@@ -346,10 +349,11 @@ impl SqliteBlockStore {
 
 impl BlockStore for SqliteBlockStore {
     fn put_block(&mut self, block: Block) {
+        let hash = compute_block_hash(&block);
         let data = serde_cbor_2::to_vec(&block).unwrap();
         self.conn.execute(
             "INSERT OR REPLACE INTO blocks (hash, height, data) VALUES (?1, ?2, ?3)",
-            (&block.hash.0[..], block.height.as_u64() as i64, &data),
+            (&hash.0[..], block.height.as_u64() as i64, &data),
         ).unwrap();
     }
 

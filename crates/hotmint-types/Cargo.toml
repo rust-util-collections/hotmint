@@ -10,6 +10,7 @@ keywords.workspace = true
 [dependencies]
 serde = { workspace = true }
 ruc = { workspace = true }
+blake3 = { workspace = true }
 
 [dev-dependencies]
 serde_cbor_2 = { workspace = true }

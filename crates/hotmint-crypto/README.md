@@ -13,7 +13,7 @@ Provides concrete implementations of the `Signer` and `Verifier` traits defined 
 |:----------|:------------|
 | `Ed25519Signer` | Implements `Signer` using ed25519-dalek |
 | `Ed25519Verifier` | Implements `Verifier` for single and aggregate signature verification |
-| `hash_block()` | Blake3 hashing of block fields |
+| `compute_block_hash()` | Blake3 hashing of block fields |
 
 ## Usage
 
@@ -45,16 +45,13 @@ let signer = Ed25519Signer::new(signing_key, ValidatorId(0));
 ### Block hashing
 
 ```rust
-use hotmint_crypto::hash_block;
-use hotmint_types::{Height, BlockHash, ViewNumber, ValidatorId};
+use hotmint_crypto::compute_block_hash;
+use hotmint_types::{Block, BlockHash};
 
-let hash = hash_block(
-    Height(1),
-    &BlockHash::default(),
-    ViewNumber(0),
-    ValidatorId(0),
-    b"payload",
-);
+let hash = compute_block_hash(&block);
+
+// Or use the convenience method on Block:
+let hash = block.compute_hash();
 ```
 
 ## License

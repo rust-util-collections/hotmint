@@ -1,6 +1,6 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
-use hotmint_api::rpc::{RpcServer, RpcState};
+use hotmint_api::rpc::{ConsensusStatus, RpcServer, RpcState};
 use hotmint_api::types::RpcResponse;
 use hotmint_consensus::store::MemoryBlockStore;
 use hotmint_mempool::Mempool;
@@ -10,9 +10,8 @@ use tokio::sync::watch;
 
 async fn setup_server() -> (String, tokio::task::JoinHandle<()>) {
     let mempool = Arc::new(Mempool::new(100, 1024));
-    let (_status_tx, status_rx) = watch::channel((1u64, 0u64, 0u64, 4usize, 0u64));
-    let store: Arc<RwLock<Box<dyn hotmint_consensus::store::BlockStore>>> =
-        Arc::new(RwLock::new(Box::new(MemoryBlockStore::new())));
+    let (_status_tx, status_rx) = watch::channel(ConsensusStatus::new(1, 0, 0, 4, 0));
+    let store = MemoryBlockStore::new_shared();
     let (_peer_tx, peer_info_rx) = watch::channel(vec![]);
     let (_vs_tx, validator_set_rx) = watch::channel(vec![]);
 

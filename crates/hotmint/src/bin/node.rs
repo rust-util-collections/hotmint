@@ -7,7 +7,8 @@ use tokio::sync::watch;
 use tracing::{Level, info};
 
 use hotmint::abci::client::IpcApplicationClient;
-use hotmint::config::{self, GenesisDoc, NodeConfig, PrivValidatorKey};
+use hotmint::api::rpc::ConsensusStatus;
+use hotmint::config::{self, GenesisDoc, NodeConfig, NodeKey, PrivValidatorKey};
 use hotmint::consensus::application::Application;
 use hotmint::consensus::engine::{ConsensusEngine, EngineConfig};
 use hotmint::consensus::pacemaker::PacemakerConfig;
@@ -47,6 +48,33 @@ enum Command {
         #[arg(long)]
         rpc_laddr: Option<String>,
     },
+    /// Generate a new validator key (Ed25519 signing keypair).
+    GenValidatorKey {
+        /// Output file path (default: priv_validator_key.json).
+        #[arg(short, long, default_value = "priv_validator_key.json")]
+        output: String,
+        /// Validator ID to assign (default: 0).
+        #[arg(long, default_value_t = 0)]
+        validator_id: u64,
+    },
+    /// Generate a new node key (Ed25519 P2P identity keypair).
+    GenNodeKey {
+        /// Output file path (default: node_key.json).
+        #[arg(short, long, default_value = "node_key.json")]
+        output: String,
+    },
+    /// Display validator info from an existing key file.
+    ShowValidator {
+        /// Path to priv_validator_key.json.
+        #[arg(short, long, default_value = "priv_validator_key.json")]
+        file: String,
+    },
+    /// Display node ID (PeerId) from an existing node key file.
+    ShowNodeId {
+        /// Path to node_key.json.
+        #[arg(short, long, default_value = "node_key.json")]
+        file: String,
+    },
 }
 
 #[tokio::main]
@@ -74,6 +102,72 @@ async fn main() {
             if let Err(e) = run_node(&home, proxy_app, p2p_laddr, rpc_laddr).await {
                 eprintln!("Fatal: {e}");
                 std::process::exit(1);
+            }
+        }
+        Command::GenValidatorKey {
+            output,
+            validator_id,
+        } => {
+            let mut key = PrivValidatorKey::generate();
+            key.validator_id = validator_id;
+            let path = std::path::Path::new(&output);
+            if let Err(e) = key.save(path) {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+            println!("Generated validator key:");
+            println!("  Validator ID: {}", key.validator_id);
+            println!("  Public key:   {}", key.public_key);
+            println!("  File:         {}", path.display());
+        }
+        Command::GenNodeKey { output } => {
+            let key = NodeKey::generate();
+            let path = std::path::Path::new(&output);
+            if let Err(e) = key.save(path) {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+            println!("Generated node key:");
+            println!("  Public key: {}", key.public_key);
+            match key.peer_id() {
+                Ok(pid) => println!("  Peer ID:    {}", pid),
+                Err(e) => eprintln!("  Peer ID:    (error: {e})"),
+            }
+            println!("  File:       {}", path.display());
+        }
+        Command::ShowValidator { file } => {
+            let path = std::path::Path::new(&file);
+            match PrivValidatorKey::load(path) {
+                Ok(key) => {
+                    println!("Validator key: {}", path.display());
+                    println!("  Validator ID: {}", key.validator_id);
+                    println!("  Public key:   {}", key.public_key);
+                    match key.peer_id() {
+                        Ok(pid) => println!("  Peer ID:      {}", pid),
+                        Err(e) => eprintln!("  Peer ID:      (error: {e})"),
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error loading {}: {e}", path.display());
+                    std::process::exit(1);
+                }
+            }
+        }
+        Command::ShowNodeId { file } => {
+            let path = std::path::Path::new(&file);
+            match NodeKey::load(path) {
+                Ok(key) => {
+                    println!("Node key: {}", path.display());
+                    println!("  Public key: {}", key.public_key);
+                    match key.peer_id() {
+                        Ok(pid) => println!("  Peer ID:    {}", pid),
+                        Err(e) => eprintln!("  Peer ID:    (error: {e})"),
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error loading {}: {e}", path.display());
+                    std::process::exit(1);
+                }
             }
         }
     }
@@ -104,11 +198,13 @@ async fn run_node(
         config.rpc.laddr = rl;
     }
 
-    // 2. Load private key
+    // 2. Load validator key (consensus signing) and node key (P2P identity)
     let priv_key = PrivValidatorKey::load(&config_dir.join("priv_validator_key.json"))
         .c(d!("failed to load priv_validator_key.json"))?;
     let signing_key = priv_key.to_signing_key()?;
-    let litep2p_keypair = priv_key.to_litep2p_keypair()?;
+    let node_key =
+        NodeKey::load(&config_dir.join("node_key.json")).c(d!("failed to load node_key.json"))?;
+    let litep2p_keypair = node_key.to_litep2p_keypair()?;
 
     // 3. Load genesis
     let genesis =
@@ -153,9 +249,7 @@ async fn run_node(
     if let Some(h) = pcs.load_last_committed_height() {
         state.last_committed_height = h;
     }
-    if let Some(mut epoch) = pcs.load_current_epoch() {
-        // rebuild_index is needed because ValidatorSet.index_map is #[serde(skip)]
-        epoch.validator_set.rebuild_index();
+    if let Some(epoch) = pcs.load_current_epoch() {
         state.validator_set = epoch.validator_set.clone();
         state.current_epoch = epoch;
     }
@@ -217,8 +311,8 @@ async fn run_node(
     let mut engine_state_height = state.last_committed_height;
 
     // 9. Wrap with status channel for RPC
-    let (status_tx, status_rx) = watch::channel((
-        0u64,
+    let (status_tx, status_rx) = watch::channel(ConsensusStatus::new(
+        0,
         state.last_committed_height.as_u64(),
         state.current_epoch.number.as_u64(),
         validator_set.validator_count(),
@@ -283,11 +377,11 @@ async fn run_node(
             while let Some(req) = sync_req_rx.recv().await {
                 let resp = match req.request {
                     SyncRequest::GetStatus => {
-                        let (view, height, epoch, _, _) = *sync_status_rx.borrow();
+                        let s = *sync_status_rx.borrow();
                         SyncResponse::Status {
-                            last_committed_height: Height(height),
-                            current_view: ViewNumber(view),
-                            epoch: EpochNumber(epoch),
+                            last_committed_height: Height(s.last_committed_height),
+                            current_view: ViewNumber(s.current_view),
+                            epoch: EpochNumber(s.epoch_number),
                         }
                     }
                     SyncRequest::GetBlocks {
@@ -430,7 +524,7 @@ async fn run_node(
 /// while also updating the RPC status watch channel on each commit.
 struct AppWithStatus {
     inner: IpcApplicationClient,
-    status_tx: watch::Sender<hotmint::api::rpc::StatusTuple>,
+    status_tx: watch::Sender<ConsensusStatus>,
     vs_tx: watch::Sender<Vec<hotmint::api::types::ValidatorInfoResponse>>,
 }
 
@@ -453,7 +547,7 @@ impl Application for AppWithStatus {
 
     fn on_commit(&self, block: &Block, ctx: &BlockContext) -> Result<()> {
         self.inner.on_commit(block, ctx)?;
-        let _ = self.status_tx.send((
+        let _ = self.status_tx.send(ConsensusStatus::new(
             ctx.view.as_u64(),
             ctx.height.as_u64(),
             ctx.epoch.as_u64(),

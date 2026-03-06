@@ -1,15 +1,11 @@
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
-
 use ed25519_dalek::SigningKey;
-use hotmint_consensus::engine::{ConsensusEngine, EngineConfig};
+use hotmint_consensus::engine::ConsensusEngineBuilder;
 use hotmint_consensus::network::ChannelNetwork;
 use hotmint_consensus::state::ConsensusState;
 use hotmint_consensus::store::MemoryBlockStore;
 use hotmint_crypto::{Ed25519Signer, Ed25519Verifier};
 use hotmint_types::*;
 use rand::rngs::OsRng;
-use tokio::sync::mpsc;
 use tracing::{Level, info};
 
 use utxo_chain::app::DemoUtxoApp;
@@ -45,15 +41,8 @@ async fn main() {
         .map(|i| Ed25519Signer::generate(ValidatorId(i)))
         .collect();
 
-    let validator_infos: Vec<ValidatorInfo> = signers
-        .iter()
-        .map(|s| ValidatorInfo {
-            id: Signer::validator_id(s),
-            public_key: Signer::public_key(s),
-            power: 1,
-        })
-        .collect();
-    let validator_set = ValidatorSet::new(validator_infos);
+    let signer_refs: Vec<&dyn Signer> = signers.iter().map(|s| s as &dyn Signer).collect();
+    let validator_set = ValidatorSet::from_signers(&signer_refs);
 
     info!(
         "Validators: {}, Quorum: {}",
@@ -61,49 +50,29 @@ async fn main() {
         validator_set.quorum_threshold()
     );
 
-    let mut receivers = HashMap::new();
-    let mut all_senders: HashMap<ValidatorId, mpsc::Sender<(ValidatorId, ConsensusMessage)>> =
-        HashMap::new();
-
-    for i in 0..NUM_VALIDATORS {
-        let (tx, rx) = mpsc::channel(8192);
-        let vid = ValidatorId(i);
-        receivers.insert(vid, rx);
-        all_senders.insert(vid, tx);
-    }
-
+    let mesh = ChannelNetwork::create_mesh(NUM_VALIDATORS);
+    assert_eq!(
+        mesh.len(),
+        signers.len(),
+        "mesh and signers must have the same length"
+    );
     let mut handles = Vec::new();
 
-    for (i, signer) in signers.into_iter().enumerate() {
+    for (i, ((network, rx), signer)) in mesh.into_iter().zip(signers.into_iter()).enumerate() {
         let vid = ValidatorId(i as u64);
-        let rx = receivers.remove(&vid).unwrap();
-
-        let senders: Vec<(ValidatorId, mpsc::Sender<(ValidatorId, ConsensusMessage)>)> =
-            all_senders
-                .iter()
-                .map(|(&id, tx)| (id, tx.clone()))
-                .collect();
-
-        let network = ChannelNetwork::new(vid, senders);
-        let store: Arc<RwLock<Box<dyn hotmint_consensus::store::BlockStore>>> =
-            Arc::new(RwLock::new(Box::new(MemoryBlockStore::new())));
-
-        let app = DemoUtxoApp::new(alice_key.clone(), &bob_key);
+        let store = MemoryBlockStore::new_shared();
         let state = ConsensusState::new(vid, validator_set.clone());
 
-        let engine = ConsensusEngine::new(
-            state,
-            store,
-            Box::new(network),
-            Box::new(app),
-            Box::new(signer),
-            rx,
-            EngineConfig {
-                verifier: Box::new(Ed25519Verifier),
-                pacemaker: None,
-                persistence: None,
-            },
-        );
+        let engine = ConsensusEngineBuilder::new()
+            .state(state)
+            .store(store)
+            .network(Box::new(network))
+            .app(Box::new(DemoUtxoApp::new(alice_key.clone(), &bob_key)))
+            .signer(Box::new(signer))
+            .messages(rx)
+            .verifier(Box::new(Ed25519Verifier))
+            .build()
+            .expect("all required fields set");
 
         handles.push(tokio::spawn(async move { engine.run().await }));
     }

@@ -93,16 +93,13 @@ This scheme is straightforward and correct but has O(n) signature size. For prod
 ## Block Hashing
 
 ```rust
-use hotmint::crypto::hash_block;
+use hotmint::crypto::compute_block_hash;
 
-let hash = hash_block(
-    height,        // Height
-    &parent_hash,  // &BlockHash
-    view,          // ViewNumber
-    proposer,      // ValidatorId
-    &payload,      // &[u8]
-);
+let hash = compute_block_hash(&block);
 // returns BlockHash — a 32-byte Blake3 hash
+
+// Or use the convenience method directly on Block:
+let hash = block.compute_hash();
 ```
 
 The hash covers all block fields except the hash itself: `height || parent_hash || view || proposer || payload`.

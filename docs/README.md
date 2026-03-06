@@ -17,3 +17,4 @@ Comprehensive documentation for the Hotmint BFT consensus framework.
 | [Networking](networking.md) | `NetworkSink` trait, in-memory channels, litep2p P2P |
 | [Mempool & API](mempool-api.md) | Transaction mempool and JSON-RPC server |
 | [Metrics](metrics.md) | Prometheus metrics and observability |
+| [Benchmarks](benchmarks.md) | Performance benchmarks and results |

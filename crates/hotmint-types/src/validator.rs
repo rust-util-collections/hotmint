@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::crypto::PublicKey;
+use crate::crypto::{PublicKey, Signer};
 use crate::view::ViewNumber;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -27,13 +27,38 @@ pub struct ValidatorInfo {
     pub power: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ValidatorSet {
     validators: Vec<ValidatorInfo>,
     total_power: u64,
     /// O(1) lookup: ValidatorId -> index in validators vec
     #[serde(skip)]
     index_map: HashMap<ValidatorId, usize>,
+}
+
+impl<'de> Deserialize<'de> for ValidatorSet {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Raw {
+            validators: Vec<ValidatorInfo>,
+            total_power: u64,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        let index_map = raw
+            .validators
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (v.id, i))
+            .collect();
+        Ok(ValidatorSet {
+            validators: raw.validators,
+            total_power: raw.total_power,
+            index_map,
+        })
+    }
 }
 
 impl ValidatorSet {
@@ -51,7 +76,24 @@ impl ValidatorSet {
         }
     }
 
-    /// Rebuild the index map after deserialization
+    /// Build a `ValidatorSet` from signers with equal power (1 each).
+    pub fn from_signers(signers: &[&dyn Signer]) -> Self {
+        let validators: Vec<ValidatorInfo> = signers
+            .iter()
+            .map(|s| ValidatorInfo {
+                id: s.validator_id(),
+                public_key: s.public_key(),
+                power: 1,
+            })
+            .collect();
+        Self::new(validators)
+    }
+
+    /// Rebuild the index map after deserialization.
+    ///
+    /// NOTE: This is now called automatically during deserialization.
+    /// You only need to call this manually if you modify the validators
+    /// list directly.
     pub fn rebuild_index(&mut self) {
         self.index_map = self
             .validators
@@ -250,8 +292,8 @@ mod tests {
     fn test_serialization_roundtrip() {
         let vs = make_vs(&[1, 2, 3]);
         let bytes = serde_cbor_2::to_vec(&vs).unwrap();
-        let mut vs2: ValidatorSet = serde_cbor_2::from_slice(&bytes).unwrap();
-        vs2.rebuild_index();
+        let vs2: ValidatorSet = serde_cbor_2::from_slice(&bytes).unwrap();
+        // index_map is auto-rebuilt during deserialization
         assert_eq!(vs2.validator_count(), 3);
         assert_eq!(vs2.index_of(ValidatorId(1)), Some(1));
         assert_eq!(vs2.total_power(), 6);

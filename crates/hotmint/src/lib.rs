@@ -63,6 +63,9 @@ pub use hotmint_abci as abci;
 /// JSON-RPC API for external interaction (status, transaction submission).
 pub use hotmint_api as api;
 
+/// Staking infrastructure: validator lifecycle, delegation, slashing, rewards.
+pub use hotmint_staking as staking;
+
 /// Prelude: commonly used types re-exported for convenience.
 pub mod prelude {
     pub use hotmint_types::{

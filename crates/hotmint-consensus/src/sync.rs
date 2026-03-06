@@ -176,7 +176,7 @@ pub fn replay_blocks(
         }
 
         // Verify block hash integrity
-        let expected_hash = hotmint_crypto::hash_block(block);
+        let expected_hash = hotmint_crypto::compute_block_hash(block);
         if block.hash != expected_hash {
             return Err(eg!(
                 "sync block hash mismatch at height {}: declared {} != computed {}",
@@ -246,7 +246,7 @@ mod tests {
             payload: vec![],
             hash: BlockHash::GENESIS, // placeholder
         };
-        block.hash = hotmint_crypto::hash_block(&block);
+        block.hash = hotmint_crypto::compute_block_hash(&block);
         block
     }
 

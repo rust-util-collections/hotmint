@@ -1,17 +1,14 @@
 use ruc::*;
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
 
 use hotmint::consensus::application::Application;
-use hotmint::consensus::engine::{ConsensusEngine, EngineConfig};
+use hotmint::consensus::engine::ConsensusEngineBuilder;
 use hotmint::consensus::network::ChannelNetwork;
 use hotmint::consensus::state::ConsensusState;
 use hotmint::consensus::store::MemoryBlockStore;
 use hotmint::crypto::{Ed25519Signer, Ed25519Verifier};
 use hotmint::prelude::*;
-use tokio::sync::mpsc;
 use tracing::{Level, info};
 
 const NUM_VALIDATORS: u64 = 4;
@@ -55,23 +52,12 @@ async fn main() {
 
     info!("starting hotmint with {} validators", NUM_VALIDATORS);
 
-    let mut signers: Vec<Option<Ed25519Signer>> = (0..NUM_VALIDATORS)
-        .map(|i| Some(Ed25519Signer::generate(ValidatorId(i))))
+    let signers: Vec<Ed25519Signer> = (0..NUM_VALIDATORS)
+        .map(|i| Ed25519Signer::generate(ValidatorId(i)))
         .collect();
 
-    let validator_infos: Vec<ValidatorInfo> = signers
-        .iter()
-        .enumerate()
-        .map(|(i, s)| {
-            let s = s.as_ref().unwrap();
-            ValidatorInfo {
-                id: ValidatorId(i as u64),
-                public_key: Signer::public_key(s),
-                power: 1,
-            }
-        })
-        .collect();
-    let validator_set = ValidatorSet::new(validator_infos);
+    let signer_refs: Vec<&dyn Signer> = signers.iter().map(|s| s as &dyn Signer).collect();
+    let validator_set = ValidatorSet::from_signers(&signer_refs);
 
     info!(
         validators = NUM_VALIDATORS,
@@ -80,53 +66,33 @@ async fn main() {
         "validator set created"
     );
 
-    let mut receivers = HashMap::new();
-    let mut all_senders: HashMap<ValidatorId, mpsc::Sender<(ValidatorId, ConsensusMessage)>> =
-        HashMap::new();
-
-    for i in 0..NUM_VALIDATORS {
-        let (tx, rx) = mpsc::channel(8192);
-        let vid = ValidatorId(i);
-        receivers.insert(vid, rx);
-        all_senders.insert(vid, tx);
-    }
+    let mesh = ChannelNetwork::create_mesh(NUM_VALIDATORS);
+    assert_eq!(
+        mesh.len(),
+        signers.len(),
+        "mesh and signers must have the same length"
+    );
 
     let mut handles = Vec::new();
 
-    for i in 0..NUM_VALIDATORS {
-        let vid = ValidatorId(i);
-        let rx = pnk!(receivers.remove(&vid));
-
-        let senders: Vec<(ValidatorId, mpsc::Sender<(ValidatorId, ConsensusMessage)>)> =
-            all_senders
-                .iter()
-                .map(|(&id, tx)| (id, tx.clone()))
-                .collect();
-
-        let network = ChannelNetwork::new(vid, senders);
-        let store = Arc::new(RwLock::new(
-            Box::new(MemoryBlockStore::new()) as Box<dyn hotmint::consensus::store::BlockStore>
-        ));
-        let app = CountingApp {
-            validator_id: vid,
-            commit_count: AtomicU64::new(0),
-        };
-        let signer = pnk!(signers[i as usize].take());
+    for (i, ((network, rx), signer)) in mesh.into_iter().zip(signers.into_iter()).enumerate() {
+        let vid = ValidatorId(i as u64);
+        let store = MemoryBlockStore::new_shared();
         let state = ConsensusState::new(vid, validator_set.clone());
 
-        let engine = ConsensusEngine::new(
-            state,
-            store,
-            Box::new(network),
-            Box::new(app),
-            Box::new(signer),
-            rx,
-            EngineConfig {
-                verifier: Box::new(Ed25519Verifier),
-                pacemaker: None,
-                persistence: None,
-            },
-        );
+        let engine = ConsensusEngineBuilder::new()
+            .state(state)
+            .store(store)
+            .network(Box::new(network))
+            .app(Box::new(CountingApp {
+                validator_id: vid,
+                commit_count: AtomicU64::new(0),
+            }))
+            .signer(Box::new(signer))
+            .messages(rx)
+            .verifier(Box::new(Ed25519Verifier))
+            .build()
+            .expect("all required fields set");
 
         handles.push(tokio::spawn(async move { engine.run().await }));
     }

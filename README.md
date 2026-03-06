@@ -117,7 +117,7 @@ cargo run --bin hotmint-node -- node
 | [Networking](docs/networking.md) | NetworkSink trait, in-memory channels, litep2p P2P |
 | [Mempool & API](docs/mempool-api.md) | Transaction mempool and JSON-RPC server |
 | [Metrics](docs/metrics.md) | Prometheus metrics and observability |
-| [Production Readiness](docs/production-readiness.md) | Validator lifecycle, staking infrastructure, gap analysis |
+| [Benchmarks](docs/benchmarks.md) | Performance benchmarks and results |
 
 ## Usage
 

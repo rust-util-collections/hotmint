@@ -6,7 +6,7 @@ use crate::leader;
 use crate::network::NetworkSink;
 use crate::state::{ConsensusState, ViewRole, ViewStep};
 use crate::store::BlockStore;
-use hotmint_crypto::hash::hash_block;
+use hotmint_crypto::hash::compute_block_hash;
 use hotmint_types::context::BlockContext;
 use hotmint_types::epoch::Epoch;
 use hotmint_types::vote::VoteType;
@@ -138,7 +138,7 @@ pub fn propose(
         payload,
         hash: BlockHash::GENESIS, // placeholder
     };
-    block.hash = hash_block(&block);
+    block.hash = compute_block_hash(&block);
 
     store.put_block(block.clone());
 
@@ -220,7 +220,7 @@ pub fn on_proposal(
     }
 
     // Verify block hash integrity
-    let expected_hash = hotmint_crypto::hash_block(&block);
+    let expected_hash = hotmint_crypto::compute_block_hash(&block);
     if block.hash != expected_hash {
         return Err(eg!(
             "block hash mismatch: declared {} != computed {}",
