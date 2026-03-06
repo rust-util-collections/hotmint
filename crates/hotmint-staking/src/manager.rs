@@ -12,7 +12,7 @@ use crate::types::{
 
 /// Central staking manager that operates on any [`StakingStore`] backend.
 ///
-/// Use this inside your [`Application::execute_block`] to process staking
+/// Use this inside your `Application::execute_block` to process staking
 /// transactions, distribute rewards, apply slashing, and compute validator
 /// set updates for epoch transitions.
 pub struct StakingManager<S: StakingStore> {
@@ -124,7 +124,7 @@ impl<S: StakingStore> StakingManager<S> {
     ///
     /// Voting power is reduced immediately. If `unbonding_period > 0`, the
     /// tokens are locked in an unbonding queue and released only after
-    /// [`process_unbonding`] is called at or after `current_height + unbonding_period`.
+    /// [`Self::process_unbonding`] is called at or after `current_height + unbonding_period`.
     pub fn undelegate(
         &mut self,
         staker: &[u8],
@@ -371,7 +371,7 @@ impl<S: StakingStore> StakingManager<S> {
     /// produce the list of [`ValidatorUpdate`]s needed to synchronize them.
     ///
     /// This is intended to be called at the end of `execute_block` and
-    /// returned in [`EndBlockResponse::validator_updates`].
+    /// returned in [`EndBlockResponse::validator_updates`](hotmint_types::EndBlockResponse::validator_updates).
     pub fn compute_validator_updates(&self, current_set: &ValidatorSet) -> Vec<ValidatorUpdate> {
         let formal = self.formal_validator_list();
         let mut updates = Vec::new();

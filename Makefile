@@ -15,7 +15,7 @@ CRATES := \
 
 .PHONY: all fmt lint build test bench bench-e2e bench-consensus bench-evm bench-utxo bench-all run clean check doc update publish
 
-all: fmt lint build test
+all: fmt lint build test _doc
 
 fmt:
 	$(CARGO) fmt --all
@@ -63,6 +63,9 @@ check:
 
 doc:
 	$(CARGO) doc --workspace --no-deps --open
+
+_doc:
+	$(CARGO) doc --workspace --no-deps
 
 clean:
 	$(CARGO) clean
