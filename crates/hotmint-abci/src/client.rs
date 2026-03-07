@@ -11,10 +11,10 @@ use hotmint_types::context::{BlockContext, OwnedBlockContext, TxContext};
 use hotmint_types::evidence::EquivocationProof;
 use hotmint_types::validator_update::EndBlockResponse;
 
-use crate::protocol::{Request, Response};
+use crate::protocol::{self, Request, Response};
 
 /// IPC client that implements [`Application`] by forwarding every call over a
-/// Unix domain socket using length-prefixed CBOR frames.
+/// Unix domain socket using length-prefixed protobuf frames.
 pub struct IpcApplicationClient {
     socket_path: PathBuf,
     conn: Mutex<Option<UnixStream>>,
@@ -38,7 +38,7 @@ impl IpcApplicationClient {
 
     /// Send a request and wait for the response, lazily connecting on first use.
     fn call(&self, req: &Request) -> Result<Response> {
-        let payload = serde_cbor_2::to_vec(req).c(d!("serialize request"))?;
+        let payload = protocol::encode_request(req);
 
         let mut guard = self.conn.lock().map_err(|e| eg!(e.to_string()))?;
         if guard.is_none() {
@@ -49,7 +49,9 @@ impl IpcApplicationClient {
 
         write_frame_sync(stream, &payload).c(d!("write request frame"))?;
         let resp_bytes = read_frame_sync(stream).c(d!("read response frame"))?;
-        let resp: Response = serde_cbor_2::from_slice(&resp_bytes).c(d!("deserialize response"))?;
+        let resp = protocol::decode_response(&resp_bytes)
+            .map_err(|e| eg!(e.to_string()))
+            .c(d!("decode response"))?;
         Ok(resp)
     }
 }

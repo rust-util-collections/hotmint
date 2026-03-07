@@ -94,22 +94,16 @@ impl<H: ApplicationHandler + 'static> IpcApplicationServer<H> {
                     }
                 };
 
-                let req: Request = match serde_cbor_2::from_slice(&frame) {
+                let req: Request = match protocol::decode_request(&frame) {
                     Ok(r) => r,
                     Err(e) => {
-                        tracing::error!(%e, "failed to deserialize request");
+                        tracing::error!(%e, "failed to decode request");
                         break;
                     }
                 };
 
                 let resp = self.dispatch(req);
-                let resp_bytes = match serde_cbor_2::to_vec(&resp) {
-                    Ok(b) => b,
-                    Err(e) => {
-                        tracing::error!(%e, "failed to serialize response");
-                        break;
-                    }
-                };
+                let resp_bytes = protocol::encode_response(&resp);
 
                 if let Err(e) = protocol::write_frame(&mut stream, &resp_bytes).await {
                     tracing::error!(%e, "write_frame error");

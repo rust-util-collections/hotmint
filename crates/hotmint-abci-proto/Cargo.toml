@@ -1,0 +1,15 @@
+[package]
+name = "hotmint-abci-proto"
+description = "Protobuf definitions and type conversions for the Hotmint ABCI IPC protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+
+[dependencies]
+prost = { workspace = true }
+hotmint-types = { workspace = true }
+
+[build-dependencies]
+prost-build = "0.13"

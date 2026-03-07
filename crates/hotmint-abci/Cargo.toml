@@ -10,8 +10,8 @@ keywords.workspace = true
 [dependencies]
 hotmint-types = { workspace = true }
 hotmint-consensus = { workspace = true }
-serde = { workspace = true }
-serde_cbor_2 = { workspace = true }
+hotmint-abci-proto = { workspace = true }
+prost = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 ruc = { workspace = true }

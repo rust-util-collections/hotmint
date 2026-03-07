@@ -1,0 +1,153 @@
+syntax = "proto3";
+package hotmint.abci;
+option go_package = "github.com/rust-util-collections/hotmint/sdk/go/proto/abci";
+
+// ---- Primitive wrappers (flattened to scalars in message fields) ----
+
+message Block {
+  uint64 height = 1;
+  bytes parent_hash = 2;      // 32 bytes
+  uint64 view = 3;
+  uint64 proposer = 4;
+  bytes payload = 5;
+  bytes hash = 6;             // 32 bytes
+}
+
+message TxContext {
+  uint64 height = 1;
+  uint64 epoch = 2;
+}
+
+message ValidatorInfo {
+  uint64 id = 1;
+  bytes public_key = 2;
+  uint64 power = 3;
+}
+
+message ValidatorSet {
+  repeated ValidatorInfo validators = 1;
+  uint64 total_power = 2;
+}
+
+message BlockContext {
+  uint64 height = 1;
+  uint64 view = 2;
+  uint64 proposer = 3;
+  uint64 epoch = 4;
+  uint64 epoch_start_view = 5;
+  ValidatorSet validator_set = 6;
+}
+
+message EquivocationProof {
+  uint64 validator = 1;
+  uint64 view = 2;
+  uint32 vote_type = 3;       // 0 = Vote, 1 = Vote2
+  bytes block_hash_a = 4;
+  bytes signature_a = 5;
+  bytes block_hash_b = 6;
+  bytes signature_b = 7;
+}
+
+message ValidatorUpdate {
+  uint64 id = 1;
+  bytes public_key = 2;
+  uint64 power = 3;
+}
+
+message EventAttribute {
+  string key = 1;
+  string value = 2;
+}
+
+message Event {
+  string type = 1;
+  repeated EventAttribute attributes = 2;
+}
+
+message EndBlockResponse {
+  repeated ValidatorUpdate validator_updates = 1;
+  repeated Event events = 2;
+}
+
+// ---- Request ----
+
+message Request {
+  oneof request {
+    BlockContext create_payload = 1;
+    ValidateBlockRequest validate_block = 2;
+    ValidateTxRequest validate_tx = 3;
+    ExecuteBlockRequest execute_block = 4;
+    OnCommitRequest on_commit = 5;
+    EquivocationProof on_evidence = 6;
+    QueryRequest query = 7;
+  }
+}
+
+message ValidateBlockRequest {
+  Block block = 1;
+  BlockContext ctx = 2;
+}
+
+message ValidateTxRequest {
+  bytes tx = 1;
+  TxContext ctx = 2;
+}
+
+message ExecuteBlockRequest {
+  repeated bytes txs = 1;
+  BlockContext ctx = 2;
+}
+
+message OnCommitRequest {
+  Block block = 1;
+  BlockContext ctx = 2;
+}
+
+message QueryRequest {
+  string path = 1;
+  bytes data = 2;
+}
+
+// ---- Response ----
+
+message Response {
+  oneof response {
+    CreatePayloadResponse create_payload = 1;
+    ValidateBlockResponse validate_block = 2;
+    ValidateTxResponse validate_tx = 3;
+    ExecuteBlockResponse execute_block = 4;
+    OnCommitResponse on_commit = 5;
+    OnEvidenceResponse on_evidence = 6;
+    QueryResponse query = 7;
+  }
+}
+
+message CreatePayloadResponse {
+  bytes payload = 1;
+}
+
+message ValidateBlockResponse {
+  bool ok = 1;
+}
+
+message ValidateTxResponse {
+  bool ok = 1;
+}
+
+message ExecuteBlockResponse {
+  EndBlockResponse result = 1;
+  string error = 2;
+}
+
+message OnCommitResponse {
+  string error = 1;
+}
+
+message OnEvidenceResponse {
+  string error = 1;
+}
+
+message QueryResponse {
+  bytes data = 1;
+  string error = 2;
+}
