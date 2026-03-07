@@ -198,16 +198,31 @@ impl Application for EvmApplication {
 
         // 1. Build per-block Transactions Trie
         let mut tx_trie = MptCalc::new();
-        for (i, tx_bytes) in txs.iter().enumerate() {
-            let _ = tx_trie.insert(&i.to_be_bytes(), tx_bytes);
-        }
+        let tx_ops: Vec<_> = txs
+            .iter()
+            .enumerate()
+            .map(|(i, tx_bytes)| (i.to_be_bytes().to_vec(), *tx_bytes))
+            .collect();
+        let tx_refs: Vec<(&[u8], Option<&[u8]>)> = tx_ops
+            .iter()
+            .map(|(k, v)| (k.as_slice(), Some(*v)))
+            .collect();
+        let _ = tx_trie.batch_update(&tx_refs);
         let _tx_root = tx_trie.root_hash().unwrap_or_default();
 
         // 2. Update persistent State Trie with all cached accounts
         let mut state_trie = self.state_trie.lock().unwrap_or_else(|e| e.into_inner());
-        for (addr, acct) in &db.cache.accounts {
-            let _ = state_trie.insert(addr.as_slice(), &encode_account_state(&acct.info));
-        }
+        let state_ops: Vec<_> = db
+            .cache
+            .accounts
+            .iter()
+            .map(|(addr, acct)| (addr.as_slice().to_vec(), encode_account_state(&acct.info)))
+            .collect();
+        let state_refs: Vec<(&[u8], Option<&[u8]>)> = state_ops
+            .iter()
+            .map(|(k, v)| (k.as_slice(), Some(v.as_slice())))
+            .collect();
+        let _ = state_trie.batch_update(&state_refs);
         let _state_root = state_trie.root_hash().unwrap_or_default();
 
         Ok(EndBlockResponse::default())

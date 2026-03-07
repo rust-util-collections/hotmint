@@ -5,9 +5,9 @@ edition = "2024"
 publish = false
 
 [dependencies]
-hotmint = { path = "../../crates/hotmint" }
-hotmint-types = { path = "../../crates/hotmint-types" }
-hotmint-consensus = { path = "../../crates/hotmint-consensus" }
-hotmint-crypto = { path = "../../crates/hotmint-crypto" }
-tokio = { version = "1", features = ["full"] }
-ruc = "9.3"
+hotmint = { workspace = true }
+hotmint-types = { workspace = true }
+hotmint-consensus = { workspace = true }
+hotmint-crypto = { workspace = true }
+tokio = { workspace = true }
+ruc = { workspace = true }

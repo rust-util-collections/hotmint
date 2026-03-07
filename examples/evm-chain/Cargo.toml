@@ -17,14 +17,14 @@ name = "bench-evm"
 path = "src/bench.rs"
 
 [dependencies]
-hotmint-types = { path = "../../crates/hotmint-types" }
-hotmint-consensus = { path = "../../crates/hotmint-consensus" }
-hotmint-crypto = { path = "../../crates/hotmint-crypto" }
-revm = { version = "36", default-features = false, features = ["std"] }
+hotmint-types = { workspace = true }
+hotmint-consensus = { workspace = true }
+hotmint-crypto = { workspace = true }
+revm = { workspace = true }
 vsdb = { workspace = true }
-serde = { version = "1", features = ["derive"] }
-serde_cbor_2 = "0.13"
-tokio = { version = "1", features = ["full"] }
-tracing = "0.1"
-tracing-subscriber = "0.3"
-ruc = "9.3"
+serde = { workspace = true }
+serde_cbor_2 = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+ruc = { workspace = true }
