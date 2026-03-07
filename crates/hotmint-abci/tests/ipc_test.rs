@@ -83,6 +83,7 @@ fn make_block() -> Block {
         view: ViewNumber(0),
         proposer: ValidatorId(0),
         payload: vec![1, 2, 3],
+        app_hash: BlockHash::default(),
         hash: BlockHash::default(),
     }
 }

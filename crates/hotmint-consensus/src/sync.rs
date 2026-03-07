@@ -9,7 +9,7 @@ use crate::store::BlockStore;
 use hotmint_types::context::BlockContext;
 use hotmint_types::epoch::Epoch;
 use hotmint_types::sync::{MAX_SYNC_BATCH, SyncRequest, SyncResponse};
-use hotmint_types::{Block, Height, ViewNumber};
+use hotmint_types::{Block, BlockHash, Height, ViewNumber};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
 use tracing::info;
@@ -25,6 +25,7 @@ pub async fn sync_to_tip(
     app: &dyn Application,
     current_epoch: &mut Epoch,
     last_committed_height: &mut Height,
+    last_app_hash: &mut BlockHash,
     request_tx: &mpsc::Sender<SyncRequest>,
     response_rx: &mut mpsc::Receiver<SyncResponse>,
 ) -> Result<()> {
@@ -92,7 +93,14 @@ pub async fn sync_to_tip(
         }
 
         // Validate chain continuity and replay
-        replay_blocks(&blocks, store, app, current_epoch, last_committed_height)?;
+        replay_blocks(
+            &blocks,
+            store,
+            app,
+            current_epoch,
+            last_committed_height,
+            last_app_hash,
+        )?;
 
         info!(
             synced_to = last_committed_height.as_u64(),
@@ -121,6 +129,7 @@ pub fn replay_blocks(
     app: &dyn Application,
     current_epoch: &mut Epoch,
     last_committed_height: &mut Height,
+    last_app_hash: &mut BlockHash,
 ) -> Result<()> {
     for (i, (block, qc)) in blocks.iter().enumerate() {
         // Validate chain continuity
@@ -214,6 +223,8 @@ pub fn replay_blocks(
         app.on_commit(block, &ctx)
             .c(d!("on_commit failed during sync"))?;
 
+        *last_app_hash = response.app_hash;
+
         // Handle epoch transitions
         if !response.validator_updates.is_empty() {
             let new_vs = current_epoch
@@ -244,6 +255,7 @@ mod tests {
             view: ViewNumber(height),
             proposer: ValidatorId(0),
             payload: vec![],
+            app_hash: BlockHash::GENESIS,
             hash: BlockHash::GENESIS, // placeholder
         };
         block.hash = hotmint_crypto::compute_block_hash(&block);
@@ -268,7 +280,16 @@ mod tests {
 
         // Pass blocks without QCs (genesis-like, no verification needed)
         let blocks: Vec<_> = vec![b1, b2, b3].into_iter().map(|b| (b, None)).collect();
-        replay_blocks(&blocks, &mut store, &app, &mut epoch, &mut height).unwrap();
+        let mut app_hash = BlockHash::GENESIS;
+        replay_blocks(
+            &blocks,
+            &mut store,
+            &app,
+            &mut epoch,
+            &mut height,
+            &mut app_hash,
+        )
+        .unwrap();
         assert_eq!(height, Height(3));
         assert!(store.get_block_by_height(Height(1)).is_some());
         assert!(store.get_block_by_height(Height(3)).is_some());
@@ -290,6 +311,17 @@ mod tests {
         let b3 = make_block(3, BlockHash([99u8; 32])); // wrong parent
 
         let blocks: Vec<_> = vec![b1, b3].into_iter().map(|b| (b, None)).collect();
-        assert!(replay_blocks(&blocks, &mut store, &app, &mut epoch, &mut height).is_err());
+        let mut app_hash = BlockHash::GENESIS;
+        assert!(
+            replay_blocks(
+                &blocks,
+                &mut store,
+                &app,
+                &mut epoch,
+                &mut height,
+                &mut app_hash
+            )
+            .is_err()
+        );
     }
 }

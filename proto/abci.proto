@@ -11,6 +11,7 @@ message Block {
   uint64 proposer = 4;
   bytes payload = 5;
   bytes hash = 6;             // 32 bytes
+  bytes app_hash = 7;         // 32 bytes, state root after executing parent block
 }
 
 message TxContext {
@@ -67,6 +68,7 @@ message Event {
 message EndBlockResponse {
   repeated ValidatorUpdate validator_updates = 1;
   repeated Event events = 2;
+  bytes app_hash = 3;         // 32 bytes, application state root after execution
 }
 
 // ---- Request ----

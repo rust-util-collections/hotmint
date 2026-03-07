@@ -28,7 +28,8 @@ type Block struct {
 	View          uint64                 `protobuf:"varint,3,opt,name=view,proto3" json:"view,omitempty"`
 	Proposer      uint64                 `protobuf:"varint,4,opt,name=proposer,proto3" json:"proposer,omitempty"`
 	Payload       []byte                 `protobuf:"bytes,5,opt,name=payload,proto3" json:"payload,omitempty"`
-	Hash          []byte                 `protobuf:"bytes,6,opt,name=hash,proto3" json:"hash,omitempty"` // 32 bytes
+	Hash          []byte                 `protobuf:"bytes,6,opt,name=hash,proto3" json:"hash,omitempty"`                      // 32 bytes
+	AppHash       []byte                 `protobuf:"bytes,7,opt,name=app_hash,json=appHash,proto3" json:"app_hash,omitempty"` // 32 bytes, state root after executing parent block
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -101,6 +102,13 @@ func (x *Block) GetPayload() []byte {
 func (x *Block) GetHash() []byte {
 	if x != nil {
 		return x.Hash
+	}
+	return nil
+}
+
+func (x *Block) GetAppHash() []byte {
+	if x != nil {
+		return x.AppHash
 	}
 	return nil
 }
@@ -613,6 +621,7 @@ type EndBlockResponse struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	ValidatorUpdates []*ValidatorUpdate     `protobuf:"bytes,1,rep,name=validator_updates,json=validatorUpdates,proto3" json:"validator_updates,omitempty"`
 	Events           []*Event               `protobuf:"bytes,2,rep,name=events,proto3" json:"events,omitempty"`
+	AppHash          []byte                 `protobuf:"bytes,3,opt,name=app_hash,json=appHash,proto3" json:"app_hash,omitempty"` // 32 bytes, application state root after execution
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -657,6 +666,13 @@ func (x *EndBlockResponse) GetValidatorUpdates() []*ValidatorUpdate {
 func (x *EndBlockResponse) GetEvents() []*Event {
 	if x != nil {
 		return x.Events
+	}
+	return nil
+}
+
+func (x *EndBlockResponse) GetAppHash() []byte {
+	if x != nil {
+		return x.AppHash
 	}
 	return nil
 }
@@ -1574,7 +1590,7 @@ var File_abci_proto protoreflect.FileDescriptor
 const file_abci_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"abci.proto\x12\fhotmint.abci\"\x9e\x01\n" +
+	"abci.proto\x12\fhotmint.abci\"\xb9\x01\n" +
 	"\x05Block\x12\x16\n" +
 	"\x06height\x18\x01 \x01(\x04R\x06height\x12\x1f\n" +
 	"\vparent_hash\x18\x02 \x01(\fR\n" +
@@ -1582,7 +1598,8 @@ const file_abci_proto_rawDesc = "" +
 	"\x04view\x18\x03 \x01(\x04R\x04view\x12\x1a\n" +
 	"\bproposer\x18\x04 \x01(\x04R\bproposer\x12\x18\n" +
 	"\apayload\x18\x05 \x01(\fR\apayload\x12\x12\n" +
-	"\x04hash\x18\x06 \x01(\fR\x04hash\"9\n" +
+	"\x04hash\x18\x06 \x01(\fR\x04hash\x12\x19\n" +
+	"\bapp_hash\x18\a \x01(\fR\aappHash\"9\n" +
 	"\tTxContext\x12\x16\n" +
 	"\x06height\x18\x01 \x01(\x04R\x06height\x12\x14\n" +
 	"\x05epoch\x18\x02 \x01(\x04R\x05epoch\"T\n" +
@@ -1628,10 +1645,11 @@ const file_abci_proto_rawDesc = "" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12<\n" +
 	"\n" +
 	"attributes\x18\x02 \x03(\v2\x1c.hotmint.abci.EventAttributeR\n" +
-	"attributes\"\x8b\x01\n" +
+	"attributes\"\xa6\x01\n" +
 	"\x10EndBlockResponse\x12J\n" +
 	"\x11validator_updates\x18\x01 \x03(\v2\x1d.hotmint.abci.ValidatorUpdateR\x10validatorUpdates\x12+\n" +
-	"\x06events\x18\x02 \x03(\v2\x13.hotmint.abci.EventR\x06events\"\xea\x03\n" +
+	"\x06events\x18\x02 \x03(\v2\x13.hotmint.abci.EventR\x06events\x12\x19\n" +
+	"\bapp_hash\x18\x03 \x01(\fR\aappHash\"\xea\x03\n" +
 	"\aRequest\x12C\n" +
 	"\x0ecreate_payload\x18\x01 \x01(\v2\x1a.hotmint.abci.BlockContextH\x00R\rcreatePayload\x12K\n" +
 	"\x0evalidate_block\x18\x02 \x01(\v2\".hotmint.abci.ValidateBlockRequestH\x00R\rvalidateBlock\x12B\n" +

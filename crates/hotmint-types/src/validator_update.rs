@@ -33,4 +33,12 @@ pub struct EndBlockResponse {
     pub validator_updates: Vec<ValidatorUpdate>,
     /// Application-defined events emitted during this block.
     pub events: Vec<Event>,
+    /// Application state root after executing this block.
+    ///
+    /// This hash is included in the **next** block's header, forming a
+    /// chain of state commitments that enables cross-node state divergence
+    /// detection. Applications that do not track state roots can leave this
+    /// as the default (all zeros).
+    #[serde(default)]
+    pub app_hash: crate::block::BlockHash,
 }

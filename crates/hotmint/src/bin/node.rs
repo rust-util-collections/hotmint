@@ -468,11 +468,13 @@ async fn run_node(
 
                     info!("starting block sync with V{}", vid.0);
                     let mut sync_store = VsdbBlockStore::new();
+                    let mut engine_state_app_hash = hotmint_types::BlockHash::GENESIS;
                     if let Err(e) = hotmint::consensus::sync::sync_to_tip(
                         &mut sync_store,
                         &ipc_client_for_sync,
                         &mut engine_state_epoch,
                         &mut engine_state_height,
+                        &mut engine_state_app_hash,
                         &sync_tx,
                         &mut sync_resp_rx,
                     )

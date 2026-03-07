@@ -2,7 +2,7 @@ use hotmint_types::{Block, BlockHash};
 
 /// Compute the Blake3 hash of a block's content fields.
 ///
-/// Hashes `height || parent_hash || view || proposer || payload`,
+/// Hashes `height || parent_hash || view || proposer || app_hash || payload`,
 /// deliberately excluding `block.hash` to avoid circularity.
 pub fn compute_block_hash(block: &Block) -> BlockHash {
     block.compute_hash()
@@ -21,6 +21,7 @@ mod tests {
             view: ViewNumber(1),
             proposer: ValidatorId(0),
             payload: b"hello".to_vec(),
+            app_hash: BlockHash::GENESIS,
             hash: BlockHash::GENESIS,
         };
         let h1 = compute_block_hash(&block);
@@ -37,6 +38,7 @@ mod tests {
             view: ViewNumber(1),
             proposer: ValidatorId(0),
             payload: b"a".to_vec(),
+            app_hash: BlockHash::GENESIS,
             hash: BlockHash::GENESIS,
         };
         let b2 = Block {
@@ -45,6 +47,7 @@ mod tests {
             view: ViewNumber(1),
             proposer: ValidatorId(0),
             payload: b"b".to_vec(),
+            app_hash: BlockHash::GENESIS,
             hash: BlockHash::GENESIS,
         };
         assert_ne!(compute_block_hash(&b1), compute_block_hash(&b2));
@@ -58,6 +61,7 @@ mod tests {
             view: ViewNumber(1),
             proposer: ValidatorId(0),
             payload: b"hello".to_vec(),
+            app_hash: BlockHash::GENESIS,
             hash: BlockHash::GENESIS,
         };
         assert_eq!(compute_block_hash(&block), block.compute_hash());

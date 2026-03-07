@@ -14,6 +14,8 @@ pub struct CommitResult {
     pub commit_qc: hotmint_types::QuorumCertificate,
     /// If an epoch transition was triggered by end_block, the new epoch (start_view is placeholder)
     pub pending_epoch: Option<Epoch>,
+    /// Application state root after executing the last committed block.
+    pub last_app_hash: BlockHash,
 }
 
 /// Decode length-prefixed transactions from a block payload.
@@ -59,6 +61,7 @@ pub fn try_commit(
             committed_blocks: vec![],
             commit_qc: double_cert.inner_qc.clone(),
             pending_epoch: None,
+            last_app_hash: BlockHash::GENESIS,
         });
     }
 
@@ -84,6 +87,7 @@ pub fn try_commit(
     to_commit.reverse();
 
     let mut pending_epoch = None;
+    let mut last_app_hash = BlockHash::GENESIS;
 
     for block in &to_commit {
         let ctx = BlockContext {
@@ -105,13 +109,12 @@ pub fn try_commit(
         app.on_commit(block, &ctx)
             .c(d!("application commit failed"))?;
 
+        last_app_hash = response.app_hash;
+
         if !response.validator_updates.is_empty() {
             let new_vs = current_epoch
                 .validator_set
                 .apply_updates(&response.validator_updates);
-            // The new epoch starts 2 views after the committing block's view.
-            // This deterministic gap gives lagging nodes time to catch up and
-            // ensures all honest nodes apply the epoch at the same view.
             let epoch_start = ViewNumber(block.view.as_u64() + 2);
             pending_epoch = Some(Epoch::new(current_epoch.number.next(), epoch_start, new_vs));
         }
@@ -123,6 +126,7 @@ pub fn try_commit(
         committed_blocks: to_commit,
         commit_qc: double_cert.inner_qc.clone(),
         pending_epoch,
+        last_app_hash,
     })
 }
 
@@ -143,6 +147,7 @@ mod tests {
             view: ViewNumber(height),
             proposer: ValidatorId(0),
             payload: vec![],
+            app_hash: BlockHash::GENESIS,
             hash,
         }
     }

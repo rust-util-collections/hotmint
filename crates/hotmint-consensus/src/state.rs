@@ -1,5 +1,6 @@
 use hotmint_types::{
-    DoubleCertificate, Epoch, Height, QuorumCertificate, ValidatorId, ValidatorSet, ViewNumber,
+    BlockHash, DoubleCertificate, Epoch, Height, QuorumCertificate, ValidatorId, ValidatorSet,
+    ViewNumber,
 };
 
 /// Role of the validator in the current view
@@ -34,6 +35,9 @@ pub struct ConsensusState {
     pub highest_double_cert: Option<DoubleCertificate>,
     pub highest_qc: Option<QuorumCertificate>,
     pub last_committed_height: Height,
+    /// Application state root from the most recently committed block's execution.
+    /// Included in the next proposed block for cross-node state divergence detection.
+    pub last_app_hash: BlockHash,
     pub current_epoch: Epoch,
 }
 
@@ -50,6 +54,7 @@ impl ConsensusState {
             highest_double_cert: None,
             highest_qc: None,
             last_committed_height: Height::GENESIS,
+            last_app_hash: BlockHash::GENESIS,
             current_epoch,
         }
     }

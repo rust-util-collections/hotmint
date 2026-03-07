@@ -104,6 +104,7 @@ fn rust_to_go_ipc() {
         view: ViewNumber(0),
         proposer: ValidatorId(0),
         payload: vec![],
+        app_hash: BlockHash::default(),
         hash: BlockHash::default(),
     };
     assert!(

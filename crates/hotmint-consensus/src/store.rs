@@ -124,6 +124,7 @@ mod tests {
             view: ViewNumber(height),
             proposer: ValidatorId(0),
             payload: vec![],
+            app_hash: BlockHash::GENESIS,
             hash,
         }
     }

@@ -559,6 +559,9 @@ impl ConsensusEngine {
                             &self.state.current_epoch,
                         ) {
                             Ok(result) => {
+                                if !result.committed_blocks.is_empty() {
+                                    self.state.last_app_hash = result.last_app_hash;
+                                }
                                 if result.pending_epoch.is_some() {
                                     self.pending_epoch = result.pending_epoch;
                                 }
@@ -855,6 +858,9 @@ impl ConsensusEngine {
                 &self.state.current_epoch,
             ) {
                 Ok(result) => {
+                    if !result.committed_blocks.is_empty() {
+                        self.state.last_app_hash = result.last_app_hash;
+                    }
                     if result.pending_epoch.is_some() {
                         self.pending_epoch = result.pending_epoch;
                     }

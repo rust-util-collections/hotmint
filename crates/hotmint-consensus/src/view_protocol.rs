@@ -136,6 +136,7 @@ pub fn propose(
         view: state.current_view,
         proposer: state.validator_id,
         payload,
+        app_hash: state.last_app_hash,
         hash: BlockHash::GENESIS, // placeholder
     };
     block.hash = compute_block_hash(&block);
@@ -229,6 +230,15 @@ pub fn on_proposal(
         ));
     }
 
+    // Verify app_hash matches local state
+    if block.app_hash != state.last_app_hash {
+        return Err(eg!(
+            "app_hash mismatch: block {} != local {}",
+            block.app_hash,
+            state.last_app_hash
+        ));
+    }
+
     let ctx = BlockContext {
         height: block.height,
         view: block.view,
@@ -259,6 +269,9 @@ pub fn on_proposal(
             &state.current_epoch,
         ) {
             Ok(result) => {
+                if !result.committed_blocks.is_empty() {
+                    state.last_app_hash = result.last_app_hash;
+                }
                 pending_epoch = result.pending_epoch;
             }
             Err(e) => {

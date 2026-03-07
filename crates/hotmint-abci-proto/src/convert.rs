@@ -21,6 +21,7 @@ impl From<&Block> for pb::Block {
             proposer: b.proposer.0,
             payload: b.payload.clone(),
             hash: b.hash.0.to_vec(),
+            app_hash: b.app_hash.0.to_vec(),
         }
     }
 }
@@ -34,6 +35,7 @@ impl From<Block> for pb::Block {
             proposer: b.proposer.0,
             payload: b.payload,
             hash: b.hash.0.to_vec(),
+            app_hash: b.app_hash.0.to_vec(),
         }
     }
 }
@@ -46,6 +48,7 @@ impl From<pb::Block> for Block {
             view: ViewNumber(b.view),
             proposer: ValidatorId(b.proposer),
             payload: b.payload,
+            app_hash: bytes_to_hash(&b.app_hash),
             hash: bytes_to_hash(&b.hash),
         }
     }
@@ -268,6 +271,7 @@ impl From<&EndBlockResponse> for pb::EndBlockResponse {
                 .map(pb::ValidatorUpdate::from)
                 .collect(),
             events: r.events.iter().map(pb::Event::from).collect(),
+            app_hash: r.app_hash.0.to_vec(),
         }
     }
 }
@@ -283,6 +287,7 @@ impl From<pb::EndBlockResponse> for EndBlockResponse {
         Self {
             validator_updates: r.validator_updates.into_iter().map(Into::into).collect(),
             events: r.events.into_iter().map(Into::into).collect(),
+            app_hash: bytes_to_hash(&r.app_hash),
         }
     }
 }

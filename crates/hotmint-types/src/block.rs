@@ -58,6 +58,12 @@ pub struct Block {
     pub view: ViewNumber,
     pub proposer: ValidatorId,
     pub payload: Vec<u8>,
+    /// Application state root after executing the **parent** block.
+    ///
+    /// Block N+1 carries the `app_hash` produced by `execute_block(Block N)`.
+    /// This ties the state transition chain to the block chain, allowing nodes
+    /// to detect divergent application state before voting.
+    pub app_hash: BlockHash,
     pub hash: BlockHash,
 }
 
@@ -69,13 +75,14 @@ impl Block {
             view: ViewNumber::GENESIS,
             proposer: ValidatorId::default(),
             payload: Vec::new(),
+            app_hash: BlockHash::GENESIS,
             hash: BlockHash::GENESIS,
         }
     }
 
     /// Compute the Blake3 hash of this block's content and return it.
     ///
-    /// This hashes `height || parent_hash || view || proposer || payload`
+    /// This hashes `height || parent_hash || view || proposer || app_hash || payload`
     /// (excluding the `hash` field itself).
     pub fn compute_hash(&self) -> BlockHash {
         let mut hasher = blake3::Hasher::new();
@@ -83,6 +90,7 @@ impl Block {
         hasher.update(&self.parent_hash.0);
         hasher.update(&self.view.as_u64().to_le_bytes());
         hasher.update(&self.proposer.0.to_le_bytes());
+        hasher.update(&self.app_hash.0);
         hasher.update(&self.payload);
         let hash = hasher.finalize();
         BlockHash(*hash.as_bytes())
