@@ -23,6 +23,7 @@ use tracing::{debug, info, warn};
 
 use std::sync::{Arc, RwLock};
 
+use crate::codec;
 use crate::peer::{PeerBook, PeerInfo};
 use crate::pex::{PexConfig, PexRequest, PexResponse};
 
@@ -307,7 +308,7 @@ impl NetworkService {
                     warn!(peer = %peer, "dropping notification from unknown peer");
                     return;
                 };
-                match serde_cbor_2::from_slice::<ConsensusMessage>(&notification) {
+                match codec::decode::<ConsensusMessage>(&notification) {
                     Ok(msg) => {
                         if let Err(e) = self.msg_tx.try_send((sender, msg)) {
                             warn!("consensus message dropped (notification): {e}");
@@ -341,7 +342,7 @@ impl NetworkService {
                     self.reqresp_handle.reject_request(request_id);
                     return;
                 };
-                match serde_cbor_2::from_slice::<ConsensusMessage>(&request) {
+                match codec::decode::<ConsensusMessage>(&request) {
                     Ok(msg) => {
                         if let Err(e) = self.msg_tx.try_send((sender, msg)) {
                             warn!("consensus message dropped (reqresp): {e}");
@@ -374,7 +375,7 @@ impl NetworkService {
                     self.sync_handle.reject_request(request_id);
                     return;
                 }
-                match serde_cbor_2::from_slice::<SyncRequest>(&request) {
+                match codec::decode::<SyncRequest>(&request) {
                     Ok(req) => {
                         if let Err(e) = self.sync_req_tx.try_send(IncomingSyncRequest {
                             request_id,
@@ -391,7 +392,7 @@ impl NetworkService {
                             .unwrap()
                             .adjust_score(&peer.to_string(), -5);
                         let err_resp = SyncResponse::Error(format!("decode error: {e}"));
-                        if let Ok(bytes) = serde_cbor_2::to_vec(&err_resp) {
+                        if let Ok(bytes) = codec::encode(&err_resp) {
                             self.sync_handle.send_response(request_id, bytes);
                         } else {
                             self.sync_handle.reject_request(request_id);
@@ -405,7 +406,7 @@ impl NetworkService {
                 ..
             } => {
                 // Forward sync response to the sync requester
-                match serde_cbor_2::from_slice::<SyncResponse>(&response) {
+                match codec::decode::<SyncResponse>(&response) {
                     Ok(resp) => {
                         if let Err(e) = self.sync_resp_tx.try_send(resp) {
                             warn!("sync response dropped: {e}");
@@ -719,7 +720,7 @@ impl Litep2pNetworkSink {
     }
 
     pub fn send_sync_request(&self, peer_id: PeerId, request: &SyncRequest) {
-        if let Ok(bytes) = serde_cbor_2::to_vec(request)
+        if let Ok(bytes) = codec::encode(request)
             && let Err(e) = self
                 .cmd_tx
                 .try_send(NetCommand::SyncRequest(peer_id, bytes))
@@ -729,7 +730,7 @@ impl Litep2pNetworkSink {
     }
 
     pub fn send_sync_response(&self, request_id: RequestId, response: &SyncResponse) {
-        if let Ok(bytes) = serde_cbor_2::to_vec(response)
+        if let Ok(bytes) = codec::encode(response)
             && let Err(e) = self
                 .cmd_tx
                 .try_send(NetCommand::SyncRespond(request_id, bytes))
@@ -741,7 +742,7 @@ impl Litep2pNetworkSink {
 
 impl NetworkSink for Litep2pNetworkSink {
     fn broadcast(&self, msg: ConsensusMessage) {
-        if let Ok(bytes) = serde_cbor_2::to_vec(&msg)
+        if let Ok(bytes) = codec::encode(&msg)
             && let Err(e) = self.cmd_tx.try_send(NetCommand::Broadcast(bytes))
         {
             warn!("broadcast cmd dropped: {e}");
@@ -749,7 +750,7 @@ impl NetworkSink for Litep2pNetworkSink {
     }
 
     fn send_to(&self, target: ValidatorId, msg: ConsensusMessage) {
-        if let Ok(bytes) = serde_cbor_2::to_vec(&msg)
+        if let Ok(bytes) = codec::encode(&msg)
             && let Err(e) = self.cmd_tx.try_send(NetCommand::SendTo(target, bytes))
         {
             warn!("send_to cmd dropped for {target}: {e}");

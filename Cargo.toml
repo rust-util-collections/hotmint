@@ -49,6 +49,7 @@ toml = "0.8"
 dirs = "6"
 hex = "0.4"
 prost = "0.13"
+zstd = "0.13"
 
 hotmint = { version = "0.6.0", path = "crates/hotmint" }
 hotmint-types = { version = "0.6.0", path = "crates/hotmint-types" }

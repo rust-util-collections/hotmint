@@ -19,3 +19,4 @@ litep2p = { workspace = true }
 futures = { workspace = true }
 serde_json = { workspace = true }
 rand = { workspace = true }
+zstd = { workspace = true }
