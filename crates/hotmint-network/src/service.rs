@@ -181,9 +181,7 @@ impl NetworkService {
             .flat_map(|(pid, addrs)| {
                 addrs.iter().map(move |addr| {
                     let mut full = addr.clone();
-                    full.push(litep2p::types::multiaddr::Protocol::P2p(
-                        (*pid).into(),
-                    ));
+                    full.push(litep2p::types::multiaddr::Protocol::P2p((*pid).into()));
                     full
                 })
             })
@@ -621,9 +619,10 @@ impl NetworkService {
                 let _ = self.connected_count_tx.send(self.connected_peers.len());
 
                 // Open notification substream to this peer for consensus messages.
-                if let Err(e) = self.notif_handle.try_open_substream_batch(
-                    std::iter::once(peer),
-                ) {
+                if let Err(e) = self
+                    .notif_handle
+                    .try_open_substream_batch(std::iter::once(peer))
+                {
                     debug!(peer = %peer, error = ?e, "failed to open notification substream");
                 }
 

@@ -59,17 +59,17 @@ async fn run(home: &std::path::Path) -> Result<()> {
     let config_dir = home.join("config");
     let data_dir = home.join("data");
 
-    let config = NodeConfig::load(&config_dir.join("config.toml"))
-        .c(d!("failed to load config.toml"))?;
+    let config =
+        NodeConfig::load(&config_dir.join("config.toml")).c(d!("failed to load config.toml"))?;
     let priv_key = PrivValidatorKey::load(&config_dir.join("priv_validator_key.json"))
         .c(d!("failed to load priv_validator_key.json"))?;
     let signing_key = priv_key.to_signing_key()?;
-    let node_key = NodeKey::load(&config_dir.join("node_key.json"))
-        .c(d!("failed to load node_key.json"))?;
+    let node_key =
+        NodeKey::load(&config_dir.join("node_key.json")).c(d!("failed to load node_key.json"))?;
     let litep2p_keypair = node_key.to_litep2p_keypair()?;
 
-    let genesis = GenesisDoc::load(&config_dir.join("genesis.json"))
-        .c(d!("failed to load genesis.json"))?;
+    let genesis =
+        GenesisDoc::load(&config_dir.join("genesis.json")).c(d!("failed to load genesis.json"))?;
     let validator_set = genesis.to_validator_set()?;
 
     let our_pk_hex = &priv_key.public_key;
@@ -226,9 +226,10 @@ async fn run(home: &std::path::Path) -> Result<()> {
                         from_height,
                         to_height,
                     } => {
-                        let clamped = Height(to_height.as_u64().min(
-                            from_height.as_u64() + hotmint_types::sync::MAX_SYNC_BATCH - 1,
-                        ));
+                        let clamped =
+                            Height(to_height.as_u64().min(
+                                from_height.as_u64() + hotmint_types::sync::MAX_SYNC_BATCH - 1,
+                            ));
                         let s = store.read().unwrap();
                         let blocks = s.get_blocks_in_range(from_height, clamped);
                         let blocks_with_qcs: Vec<_> = blocks
@@ -263,11 +264,9 @@ async fn run(home: &std::path::Path) -> Result<()> {
                 info!("no peers connected within timeout, skipping sync");
                 break;
             }
-            let _ = tokio::time::timeout(
-                tokio::time::Duration::from_millis(500),
-                count_rx.changed(),
-            )
-            .await;
+            let _ =
+                tokio::time::timeout(tokio::time::Duration::from_millis(500), count_rx.changed())
+                    .await;
         }
 
         if *count_rx.borrow() > 0 {
@@ -369,11 +368,7 @@ impl<A: Application> Application for StatusApp<A> {
     fn validate_block(&self, block: &Block, ctx: &hotmint_types::context::BlockContext) -> bool {
         self.inner.validate_block(block, ctx)
     }
-    fn validate_tx(
-        &self,
-        tx: &[u8],
-        ctx: Option<&hotmint_types::context::TxContext>,
-    ) -> bool {
+    fn validate_tx(&self, tx: &[u8], ctx: Option<&hotmint_types::context::TxContext>) -> bool {
         self.inner.validate_tx(tx, ctx)
     }
     fn execute_block(

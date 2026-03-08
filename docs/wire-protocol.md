@@ -107,7 +107,46 @@ itself is excluded from the computation to avoid circularity.
 `app_hash` is the application state root after executing the **parent** block
 (delayed inclusion, following the CometBFT model).
 
-## 5. Version History
+## 5. Real-World Benchmark (Multi-Machine Cluster)
+
+4-node cluster across heterogeneous machines and OS:
+
+| Node | OS | Arch | Network | Deployment Mode |
+|------|----|------|---------|-----------------|
+| V0 | macOS 15.4 | ARM64 | WiFi (NAT/DMZ) | Rust embedded (single-process) |
+| V1 | Linux (Gentoo, EPYC 48-core) | x86_64 | Wired LAN | Go ABCI (dual-process) |
+| V2 | FreeBSD 14.4 | amd64 | Wired LAN | Rust ABCI (dual-process) |
+| V3 | FreeBSD 14.4 | amd64 | Wired LAN | Rust embedded (single-process) |
+
+### Scenario A: All Rust Embedded (Single-Process)
+
+All 4 nodes using `cluster-node` (embedded NoopApplication):
+
+- **~130 blocks in 60 seconds → ~2.1 blocks/sec**
+- All nodes committed identical block hashes
+- WiFi node (V0) kept pace with wired nodes
+- Leader rotation (V0→V1→V2→V3) worked correctly
+
+### Scenario B: Mixed Deployment Modes
+
+3 different deployment modes in the same cluster:
+
+- **~128 blocks in 90 seconds → ~1.4 blocks/sec** (full cluster)
+- WiFi node joined late and synced to ~2.0 blocks/sec once caught up
+- Go ABCI, Rust ABCI, and Rust embedded modes fully interoperable
+- Block hashes consistent across all nodes and all deployment modes
+
+### Key Findings
+
+- The HotStuff-2 two-chain commit rule tolerates the WiFi node's higher
+  latency — the 3 wired nodes form a quorum (3/4 ≥ 2/3) independently
+- Cross-OS interop (macOS/Linux/FreeBSD) works without issues
+- ABCI dual-process modes (Go and Rust) produce the same consensus
+  results as the embedded single-process mode
+- Network latency across WAN is the dominant factor in block time;
+  on a LAN cluster, expect significantly higher throughput
+
+## 6. Version History
 
 | Version | Changes |
 |---------|---------|
