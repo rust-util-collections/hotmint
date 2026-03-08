@@ -120,6 +120,8 @@ pub struct NetworkService {
     peer_book: Arc<RwLock<PeerBook>>,
     pex_config: PexConfig,
     persistent_peers: HashMap<ValidatorId, PeerId>,
+    /// Addresses to dial at startup (from persistent_peers config).
+    initial_dial_addresses: Vec<Multiaddr>,
     msg_tx: mpsc::Sender<(ValidatorId, ConsensusMessage)>,
     cmd_rx: mpsc::Receiver<NetCommand>,
     sync_req_tx: mpsc::Sender<IncomingSyncRequest>,
@@ -173,6 +175,20 @@ impl NetworkService {
             config_builder = config_builder.with_keypair(kp);
         }
 
+        // Collect dial addresses with /p2p/<peer_id> suffix for startup dialing
+        let initial_dial_addresses: Vec<Multiaddr> = known_addresses
+            .iter()
+            .flat_map(|(pid, addrs)| {
+                addrs.iter().map(move |addr| {
+                    let mut full = addr.clone();
+                    full.push(litep2p::types::multiaddr::Protocol::P2p(
+                        (*pid).into(),
+                    ));
+                    full
+                })
+            })
+            .collect();
+
         if !known_addresses.is_empty() {
             config_builder = config_builder.with_known_addresses(known_addresses.into_iter());
         }
@@ -221,6 +237,7 @@ impl NetworkService {
                 peer_book,
                 pex_config,
                 persistent_peers,
+                initial_dial_addresses,
                 msg_tx,
                 cmd_rx,
                 sync_req_tx,
@@ -244,6 +261,13 @@ impl NetworkService {
 
     /// Run the network event loop
     pub async fn run(mut self) {
+        // Dial all persistent peers at startup using full multiaddrs.
+        for addr in std::mem::take(&mut self.initial_dial_addresses) {
+            if let Err(e) = self.litep2p.dial_address(addr.clone()).await {
+                debug!(address = %addr, error = ?e, "initial dial failed (will retry)");
+            }
+        }
+
         let mut maintenance_interval =
             tokio::time::interval(tokio::time::Duration::from_secs(MAINTENANCE_INTERVAL_SECS));
         let mut pex_interval = tokio::time::interval(tokio::time::Duration::from_secs(
@@ -595,6 +619,14 @@ impl NetworkService {
                 info!(peer = %peer, endpoint = ?endpoint, "connection established");
                 self.connected_peers.insert(peer);
                 let _ = self.connected_count_tx.send(self.connected_peers.len());
+
+                // Open notification substream to this peer for consensus messages.
+                if let Err(e) = self.notif_handle.try_open_substream_batch(
+                    std::iter::once(peer),
+                ) {
+                    debug!(peer = %peer, error = ?e, "failed to open notification substream");
+                }
+
                 // Update last_seen in peer book
                 if let Some(info) = self.peer_book.write().unwrap().get_mut(&peer.to_string()) {
                     info.touch();

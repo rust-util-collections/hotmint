@@ -1,0 +1,26 @@
+[package]
+name = "cluster-node"
+version = "0.1.0"
+edition.workspace = true
+
+[[bin]]
+name = "cluster-node"
+path = "src/main.rs"
+
+[[bin]]
+name = "rust-abci-server"
+path = "src/abci_server.rs"
+
+[dependencies]
+hotmint = { workspace = true }
+hotmint-types = { workspace = true }
+hotmint-crypto = { workspace = true }
+ruc = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { workspace = true }
+hex = { workspace = true }
+litep2p = { workspace = true }
+vsdb = { workspace = true }
+hotmint-abci = { workspace = true }

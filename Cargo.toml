@@ -17,6 +17,7 @@ members = [
     "examples/bench-consensus",
     "examples/bench-ipc",
     "examples/utxo-chain",
+    "examples/cluster-node",
 ]
 
 [workspace.package]
