@@ -1,6 +1,6 @@
 //! Minimal Rust ABCI server for testing dual-process mode.
 //!
-//! Usage: rust-abci-server <socket-path>
+//! Usage: `rust-abci-server <socket-path>`
 
 use std::sync::Arc;
 

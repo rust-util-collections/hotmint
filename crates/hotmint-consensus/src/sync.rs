@@ -121,6 +121,44 @@ pub async fn sync_to_tip(
     Ok(())
 }
 
+/// Mutable state for `run_sync_loop`.
+pub struct SyncLoopState<'a> {
+    pub store: &'a mut dyn BlockStore,
+    pub app: &'a dyn Application,
+    pub current_epoch: &'a mut Epoch,
+    pub last_committed_height: &'a mut Height,
+    pub last_app_hash: &'a mut BlockHash,
+    pub request_tx: &'a mpsc::Sender<SyncRequest>,
+    pub response_rx: &'a mut mpsc::Receiver<SyncResponse>,
+}
+
+/// Run a continuous sync loop for fullnode mode.
+///
+/// Polls `sync_to_tip()` at a regular interval, keeping the fullnode's
+/// block store and application state up to date with the validator cluster.
+/// This function never returns.
+pub async fn run_sync_loop(s: &mut SyncLoopState<'_>, poll_interval: Duration) {
+    loop {
+        match sync_to_tip(
+            s.store,
+            s.app,
+            s.current_epoch,
+            s.last_committed_height,
+            s.last_app_hash,
+            s.request_tx,
+            s.response_rx,
+        )
+        .await
+        {
+            Ok(()) => {}
+            Err(e) => {
+                tracing::warn!(%e, "sync round failed, will retry");
+            }
+        }
+        tokio::time::sleep(poll_interval).await;
+    }
+}
+
 /// Replay a batch of blocks: store them and run the application lifecycle.
 /// Validates chain continuity (parent_hash linkage).
 pub fn replay_blocks(
@@ -171,12 +209,12 @@ pub fn replay_blocks(
                 ));
             }
         } else if block.height.as_u64() > 1 {
-            // Non-genesis blocks without QC are suspicious but we accept them
-            // with a warning (backwards compatibility with older sync peers)
-            tracing::warn!(
-                height = block.height.as_u64(),
-                "sync block missing commit QC"
-            );
+            // Non-genesis blocks MUST have a commit QC — without one, the block
+            // has not been certified by a 2/3 quorum and must be rejected.
+            return Err(eg!(
+                "sync block at height {} missing commit QC — refusing unverified block",
+                block.height.as_u64()
+            ));
         }
 
         // Skip already-committed blocks
@@ -184,7 +222,7 @@ pub fn replay_blocks(
             continue;
         }
 
-        // Verify block hash integrity
+        // Verify block hash integrity (includes app_hash in computation)
         let expected_hash = hotmint_crypto::compute_block_hash(block);
         if block.hash != expected_hash {
             return Err(eg!(
@@ -192,6 +230,16 @@ pub fn replay_blocks(
                 block.height.as_u64(),
                 block.hash,
                 expected_hash
+            ));
+        }
+
+        // Verify app_hash matches local application state
+        if block.app_hash != *last_app_hash {
+            return Err(eg!(
+                "sync block app_hash mismatch at height {}: block {} != local {}",
+                block.height.as_u64(),
+                block.app_hash,
+                last_app_hash
             ));
         }
 
@@ -246,7 +294,23 @@ mod tests {
     use super::*;
     use crate::application::NoopApplication;
     use crate::store::MemoryBlockStore;
-    use hotmint_types::{BlockHash, ValidatorId, ViewNumber};
+    use hotmint_types::{BlockHash, QuorumCertificate, ValidatorId, ViewNumber};
+
+    fn make_qc(block: &Block, signer: &hotmint_crypto::Ed25519Signer) -> QuorumCertificate {
+        let vote_bytes = hotmint_types::vote::Vote::signing_bytes(
+            block.view,
+            &block.hash,
+            hotmint_types::vote::VoteType::Vote,
+        );
+        let sig = hotmint_types::Signer::sign(signer, &vote_bytes);
+        let mut agg = hotmint_types::AggregateSignature::new(1);
+        agg.add(0, sig).unwrap();
+        QuorumCertificate {
+            block_hash: block.hash,
+            view: block.view,
+            aggregate_signature: agg,
+        }
+    }
 
     fn make_block(height: u64, parent: BlockHash) -> Block {
         let mut block = Block {
@@ -266,9 +330,10 @@ mod tests {
     fn test_replay_blocks_valid_chain() {
         let mut store = MemoryBlockStore::new();
         let app = NoopApplication;
+        let signer = hotmint_crypto::Ed25519Signer::generate(ValidatorId(0));
         let vs = hotmint_types::ValidatorSet::new(vec![hotmint_types::ValidatorInfo {
             id: ValidatorId(0),
-            public_key: hotmint_types::PublicKey(vec![0]),
+            public_key: hotmint_types::Signer::public_key(&signer),
             power: 1,
         }]);
         let mut epoch = Epoch::genesis(vs);
@@ -278,8 +343,11 @@ mod tests {
         let b2 = make_block(2, b1.hash);
         let b3 = make_block(3, b2.hash);
 
-        // Pass blocks without QCs (genesis-like, no verification needed)
-        let blocks: Vec<_> = vec![b1, b2, b3].into_iter().map(|b| (b, None)).collect();
+        let qc1 = make_qc(&b1, &signer);
+        let qc2 = make_qc(&b2, &signer);
+        let qc3 = make_qc(&b3, &signer);
+
+        let blocks: Vec<_> = vec![(b1, Some(qc1)), (b2, Some(qc2)), (b3, Some(qc3))];
         let mut app_hash = BlockHash::GENESIS;
         replay_blocks(
             &blocks,
@@ -296,12 +364,45 @@ mod tests {
     }
 
     #[test]
+    fn test_replay_blocks_rejects_missing_qc() {
+        let mut store = MemoryBlockStore::new();
+        let app = NoopApplication;
+        let signer = hotmint_crypto::Ed25519Signer::generate(ValidatorId(0));
+        let vs = hotmint_types::ValidatorSet::new(vec![hotmint_types::ValidatorInfo {
+            id: ValidatorId(0),
+            public_key: hotmint_types::Signer::public_key(&signer),
+            power: 1,
+        }]);
+        let mut epoch = Epoch::genesis(vs);
+        let mut height = Height::GENESIS;
+
+        let b1 = make_block(1, BlockHash::GENESIS);
+        let qc1 = make_qc(&b1, &signer);
+        let b2 = make_block(2, b1.hash);
+        // Non-genesis block without QC should be rejected
+        let blocks: Vec<_> = vec![(b1, Some(qc1)), (b2, None)];
+        let mut app_hash = BlockHash::GENESIS;
+        assert!(
+            replay_blocks(
+                &blocks,
+                &mut store,
+                &app,
+                &mut epoch,
+                &mut height,
+                &mut app_hash
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn test_replay_blocks_broken_chain() {
         let mut store = MemoryBlockStore::new();
         let app = NoopApplication;
+        let signer = hotmint_crypto::Ed25519Signer::generate(ValidatorId(0));
         let vs = hotmint_types::ValidatorSet::new(vec![hotmint_types::ValidatorInfo {
             id: ValidatorId(0),
-            public_key: hotmint_types::PublicKey(vec![0]),
+            public_key: hotmint_types::Signer::public_key(&signer),
             power: 1,
         }]);
         let mut epoch = Epoch::genesis(vs);
@@ -310,7 +411,9 @@ mod tests {
         let b1 = make_block(1, BlockHash::GENESIS);
         let b3 = make_block(3, BlockHash([99u8; 32])); // wrong parent
 
-        let blocks: Vec<_> = vec![b1, b3].into_iter().map(|b| (b, None)).collect();
+        let qc1 = make_qc(&b1, &signer);
+        let qc3 = make_qc(&b3, &signer);
+        let blocks: Vec<_> = vec![(b1, Some(qc1)), (b3, Some(qc3))];
         let mut app_hash = BlockHash::GENESIS;
         assert!(
             replay_blocks(

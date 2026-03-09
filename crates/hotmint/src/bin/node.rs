@@ -211,21 +211,40 @@ async fn run_node(
         GenesisDoc::load(&config_dir.join("genesis.json")).c(d!("failed to load genesis.json"))?;
     let validator_set = genesis.to_validator_set()?;
 
-    // 4. Find our validator ID
+    // 4. Find our validator ID.
+    // If not in genesis, assign a sentinel ID — the node runs as a fullnode
+    // (observes consensus, syncs blocks, serves RPC) but does not vote or propose.
+    // If later added to the validator set via epoch transition, it automatically
+    // begins participating in consensus.
     let our_pk_hex = &priv_key.public_key;
-    let our_gv = genesis
+    let is_fullnode;
+    let our_vid = if let Some(gv) = genesis
         .validators
         .iter()
         .find(|v| &v.public_key == our_pk_hex)
-        .ok_or_else(|| eg!("this node's public key not found in genesis validator set"))?;
-    let our_vid = ValidatorId(our_gv.id);
+    {
+        is_fullnode = config.node.mode == "fullnode";
+        ValidatorId(gv.id)
+    } else {
+        is_fullnode = true;
+        // Use priv_key.validator_id as a unique sentinel (not in the active set).
+        ValidatorId(priv_key.validator_id)
+    };
 
-    info!(
-        validator_id = %our_vid,
-        validators = validator_set.validator_count(),
-        quorum = validator_set.quorum_threshold(),
-        "starting hotmint node"
-    );
+    if is_fullnode {
+        info!(
+            node_id = our_vid.0,
+            validators = validator_set.validator_count(),
+            "starting hotmint fullnode (sync-only, no consensus participation)"
+        );
+    } else {
+        info!(
+            validator_id = %our_vid,
+            validators = validator_set.validator_count(),
+            quorum = validator_set.quorum_threshold(),
+            "starting hotmint validator node"
+        );
+    }
 
     // 5. Set up persistent storage
     std::fs::create_dir_all(&data_dir).c(d!("create data dir"))?;
@@ -294,19 +313,27 @@ async fn run_node(
         )?
     };
 
-    // 8. Create ABCI application client and verify connectivity
-    let proxy_path = config
-        .proxy_app
-        .strip_prefix("unix://")
-        .unwrap_or(&config.proxy_app);
-    let ipc_client = IpcApplicationClient::new(proxy_path);
-    ipc_client.check_connection().c(d!(
-        "ABCI application not reachable at '{}' — start your application first",
-        proxy_path
-    ))?;
-
-    // Save state for sync (before engine consumes everything)
-    let ipc_client_for_sync = IpcApplicationClient::new(proxy_path);
+    // 8. Create application (ABCI client or embedded noop for fullnode)
+    let use_abci = !is_fullnode || !config.proxy_app.is_empty();
+    let (app_box, sync_app_box): (Box<dyn Application>, Box<dyn Application>) = if use_abci {
+        let proxy_path = config
+            .proxy_app
+            .strip_prefix("unix://")
+            .unwrap_or(&config.proxy_app);
+        let ipc_client = IpcApplicationClient::new(proxy_path);
+        ipc_client.check_connection().c(d!(
+            "ABCI application not reachable at '{}' — start your application first",
+            proxy_path
+        ))?;
+        let ipc_client_for_sync = IpcApplicationClient::new(proxy_path);
+        (Box::new(ipc_client), Box::new(ipc_client_for_sync))
+    } else {
+        info!("fullnode mode: using embedded no-op application");
+        (
+            Box::new(hotmint::consensus::application::NoopApplication),
+            Box::new(hotmint::consensus::application::NoopApplication),
+        )
+    };
     let mut engine_state_epoch = state.current_epoch.clone();
     let mut engine_state_height = state.last_committed_height;
 
@@ -333,7 +360,7 @@ async fn run_node(
     let (vs_tx, vs_rx) = watch::channel(initial_vs);
 
     let app: Arc<dyn Application> = Arc::new(AppWithStatus {
-        inner: ipc_client,
+        inner: app_box,
         status_tx,
         vs_tx,
     });
@@ -471,7 +498,7 @@ async fn run_node(
                     let mut engine_state_app_hash = hotmint_types::BlockHash::GENESIS;
                     if let Err(e) = hotmint::consensus::sync::sync_to_tip(
                         &mut sync_store,
-                        &ipc_client_for_sync,
+                        sync_app_box.as_ref(),
                         &mut engine_state_epoch,
                         &mut engine_state_height,
                         &mut engine_state_app_hash,
@@ -522,10 +549,10 @@ async fn run_node(
     Ok(())
 }
 
-/// Wrapper that implements `Application` by delegating to the IPC client,
+/// Wrapper that implements `Application` by delegating to an inner application,
 /// while also updating the RPC status watch channel on each commit.
 struct AppWithStatus {
-    inner: IpcApplicationClient,
+    inner: Box<dyn Application>,
     status_tx: watch::Sender<ConsensusStatus>,
     vs_tx: watch::Sender<Vec<hotmint::api::types::ValidatorInfoResponse>>,
 }
