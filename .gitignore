@@ -11,3 +11,5 @@ Cargo.lock
 .gemini
 .copilot
 .aider
+sdk/go/vendor/
+sdk/go/vendor/
