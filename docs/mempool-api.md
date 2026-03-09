@@ -311,7 +311,6 @@ use hotmint::consensus::application::Application;
 use hotmint::consensus::engine::ConsensusEngine;
 use hotmint::consensus::state::ConsensusState;
 use hotmint::consensus::store::MemoryBlockStore;
-use hotmint::consensus::network::ChannelNetwork;
 use hotmint::crypto::Ed25519Signer;
 use hotmint::mempool::Mempool;
 use hotmint::api::rpc::{RpcServer, RpcState};

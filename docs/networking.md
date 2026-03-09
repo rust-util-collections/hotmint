@@ -1,6 +1,6 @@
 # Networking
 
-Hotmint provides two `NetworkSink` implementations: in-memory channels for single-process setups and litep2p for real P2P networking.
+Hotmint uses [litep2p](https://crates.io/crates/litep2p) for P2P networking. The `NetworkService` manages peer connections, consensus message delivery, block synchronization, and peer exchange.
 
 ## NetworkSink Trait
 
@@ -15,44 +15,7 @@ pub trait NetworkSink: Send + Sync {
 - `broadcast` — send a message to all validators (used for proposals, prepare, wishes, TCs)
 - `send_to` — send a message to a specific validator (used for votes)
 
-## ChannelNetwork (In-Memory)
-
-Connects validators within a single process via `tokio::mpsc` bounded channels. Ideal for testing, development, and benchmarks.
-
-```rust
-use hotmint::consensus::network::ChannelNetwork;
-use tokio::sync::mpsc;
-
-// create a channel for each validator
-let mut receivers = HashMap::new();
-let mut all_senders = HashMap::new();
-for i in 0..num_validators {
-    let (tx, rx) = mpsc::channel(8192);
-    receivers.insert(ValidatorId(i), rx);
-    all_senders.insert(ValidatorId(i), tx);
-}
-
-// build each validator's network sink
-for i in 0..num_validators {
-    let vid = ValidatorId(i);
-    let senders: Vec<_> = all_senders
-        .iter()
-        .map(|(&id, tx)| (id, tx.clone()))
-        .collect();
-
-    let network = ChannelNetwork::new(vid, senders);
-    let rx = receivers.remove(&vid).unwrap();
-
-    // pass `network` as Box<dyn NetworkSink> and `rx` to ConsensusEngine::new()
-}
-```
-
-Behavior:
-- `broadcast` sends to all channels except the sender's own
-- `send_to` sends to the matching target channel
-- Messages are delivered immediately (no serialization, no network latency)
-
-## litep2p NetworkService (P2P)
+## litep2p NetworkService
 
 For multi-process and multi-machine deployments, `NetworkService` provides real P2P networking using [litep2p](https://crates.io/crates/litep2p).
 
