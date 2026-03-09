@@ -13,7 +13,7 @@ use std::sync::{Arc, RwLock};
 
 use clap::Parser;
 use tokio::sync::watch;
-use tracing::{Level, info};
+use tracing::info;
 
 use hotmint::api::rpc::ConsensusStatus;
 use hotmint::config::{self, GenesisDoc, NodeConfig, NodeKey, PrivValidatorKey};
