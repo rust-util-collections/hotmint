@@ -443,10 +443,12 @@ async fn run_node(
         use hotmint_types::sync::SyncRequest;
 
         info!("waiting for peer connection before sync...");
-        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(15);
         let mut count_rx = connected_count_rx;
         loop {
             if *count_rx.borrow() > 0 {
+                // Wait for subprotocol handshakes to complete after transport connects
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                 break;
             }
             if tokio::time::Instant::now() >= deadline {
@@ -520,6 +522,22 @@ async fn run_node(
     state.last_committed_height = engine_state_height;
     state.current_epoch = engine_state_epoch;
     state.validator_set = state.current_epoch.validator_set.clone();
+
+    // Advance current_view to match synced height so the engine joins the
+    // correct view instead of starting from view 1.
+    if engine_state_height > Height::GENESIS {
+        let s = store.read().unwrap();
+        if let Some(block) = s.get_block_by_height(engine_state_height) {
+            let synced_view = ViewNumber(block.view.as_u64() + 1);
+            if synced_view > state.current_view {
+                info!(
+                    synced_view = synced_view.as_u64(),
+                    "advancing view to match synced state"
+                );
+                state.current_view = synced_view;
+            }
+        }
+    }
 
     let signer = Ed25519Signer::new(signing_key, our_vid);
     let pacemaker_config = PacemakerConfig {
