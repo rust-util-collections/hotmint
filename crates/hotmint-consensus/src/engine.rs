@@ -887,11 +887,16 @@ impl ConsensusEngine {
     }
 
     fn handle_timeout(&mut self) {
-        info!(
-            validator = %self.state.validator_id,
-            view = %self.state.current_view,
-            "view timeout, sending wish"
-        );
+        // Only broadcast wishes if we have voting power (avoid network spam from fullnodes)
+        let has_power = self.state.validator_set.power_of(self.state.validator_id) > 0;
+
+        if has_power {
+            info!(
+                validator = %self.state.validator_id,
+                view = %self.state.current_view,
+                "view timeout, sending wish"
+            );
+        }
 
         let wish = self.pacemaker.build_wish(
             self.state.current_view,
@@ -900,7 +905,9 @@ impl ConsensusEngine {
             self.signer.as_ref(),
         );
 
-        self.network.broadcast(wish.clone());
+        if has_power {
+            self.network.broadcast(wish.clone());
+        }
 
         // Also process our own wish
         if let ConsensusMessage::Wish {

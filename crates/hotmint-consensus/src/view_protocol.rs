@@ -280,25 +280,27 @@ pub fn on_proposal(
         }
     }
 
-    // Vote (first phase) → send to current leader
-    let vote_bytes = Vote::signing_bytes(state.current_view, &block.hash, VoteType::Vote);
-    let signature = signer.sign(&vote_bytes);
-    let vote = Vote {
-        block_hash: block.hash,
-        view: state.current_view,
-        validator: state.validator_id,
-        signature,
-        vote_type: VoteType::Vote,
-    };
+    // Vote (first phase) → send to current leader (only if we have voting power)
+    if state.validator_set.power_of(state.validator_id) > 0 {
+        let vote_bytes = Vote::signing_bytes(state.current_view, &block.hash, VoteType::Vote);
+        let signature = signer.sign(&vote_bytes);
+        let vote = Vote {
+            block_hash: block.hash,
+            view: state.current_view,
+            validator: state.validator_id,
+            signature,
+            vote_type: VoteType::Vote,
+        };
 
-    let leader_id = state.validator_set.leader_for_view(state.current_view).id;
-    info!(
-        validator = %state.validator_id,
-        view = %state.current_view,
-        hash = %block.hash,
-        "voting for block"
-    );
-    network.send_to(leader_id, ConsensusMessage::VoteMsg(vote));
+        let leader_id = state.validator_set.leader_for_view(state.current_view).id;
+        info!(
+            validator = %state.validator_id,
+            view = %state.current_view,
+            hash = %block.hash,
+            "voting for block"
+        );
+        network.send_to(leader_id, ConsensusMessage::VoteMsg(vote));
+    }
 
     state.step = ViewStep::Voted;
     Ok(pending_epoch)
@@ -342,26 +344,28 @@ pub fn on_prepare(
     state.update_locked_qc(&qc);
     state.update_highest_qc(&qc);
 
-    // Vote2 → send to next leader
-    let vote_bytes = Vote::signing_bytes(state.current_view, &qc.block_hash, VoteType::Vote2);
-    let signature = signer.sign(&vote_bytes);
-    let vote = Vote {
-        block_hash: qc.block_hash,
-        view: state.current_view,
-        validator: state.validator_id,
-        signature,
-        vote_type: VoteType::Vote2,
-    };
+    // Vote2 → send to next leader (only if we have voting power)
+    if state.validator_set.power_of(state.validator_id) > 0 {
+        let vote_bytes = Vote::signing_bytes(state.current_view, &qc.block_hash, VoteType::Vote2);
+        let signature = signer.sign(&vote_bytes);
+        let vote = Vote {
+            block_hash: qc.block_hash,
+            view: state.current_view,
+            validator: state.validator_id,
+            signature,
+            vote_type: VoteType::Vote2,
+        };
 
-    let next_leader_id = leader::next_leader(&state.validator_set, state.current_view);
-    info!(
-        validator = %state.validator_id,
-        view = %state.current_view,
-        hash = %qc.block_hash,
-        "sending vote2 to next leader {}",
-        next_leader_id
-    );
-    network.send_to(next_leader_id, ConsensusMessage::Vote2Msg(vote));
+        let next_leader_id = leader::next_leader(&state.validator_set, state.current_view);
+        info!(
+            validator = %state.validator_id,
+            view = %state.current_view,
+            hash = %qc.block_hash,
+            "sending vote2 to next leader {}",
+            next_leader_id
+        );
+        network.send_to(next_leader_id, ConsensusMessage::Vote2Msg(vote));
+    }
 
     state.step = ViewStep::SentVote2;
 }
