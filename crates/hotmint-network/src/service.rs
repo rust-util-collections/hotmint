@@ -392,8 +392,8 @@ impl NetworkService {
                 request,
                 ..
             } => {
-                if !self.peer_map.peer_to_validator.contains_key(&peer) {
-                    warn!(peer = %peer, "rejecting sync request from unknown peer");
+                if !self.connected_peers.contains(&peer) {
+                    warn!(peer = %peer, "rejecting sync request from unconnected peer");
                     self.sync_handle.reject_request(request_id);
                     return;
                 }
@@ -659,7 +659,8 @@ impl NetworkService {
     async fn handle_command(&mut self, cmd: NetCommand) {
         match cmd {
             NetCommand::Broadcast(bytes) => {
-                for &peer in self.peer_map.peer_to_validator.keys() {
+                // Broadcast to all connected peers (validators + fullnodes).
+                for &peer in &self.connected_peers {
                     let _ = self
                         .notif_handle
                         .send_sync_notification(peer, bytes.clone());

@@ -525,17 +525,15 @@ async fn run_node(
 
     // Advance current_view to match synced height so the engine joins the
     // correct view instead of starting from view 1.
+    // Use height as a lower bound for view (each committed block consumed at least one view).
     if engine_state_height > Height::GENESIS {
-        let s = store.read().unwrap();
-        if let Some(block) = s.get_block_by_height(engine_state_height) {
-            let synced_view = ViewNumber(block.view.as_u64() + 1);
-            if synced_view > state.current_view {
-                info!(
-                    synced_view = synced_view.as_u64(),
-                    "advancing view to match synced state"
-                );
-                state.current_view = synced_view;
-            }
+        let synced_view = ViewNumber(engine_state_height.as_u64() + 1);
+        if synced_view > state.current_view {
+            info!(
+                synced_view = synced_view.as_u64(),
+                "advancing view to match synced state"
+            );
+            state.current_view = synced_view;
         }
     }
 
