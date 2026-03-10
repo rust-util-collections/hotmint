@@ -110,8 +110,8 @@ The `hotmint-node` binary accepts the following flags:
 |:-----|:------------|:--------|
 | `--home <PATH>` | Set the home directory for config and data | `~/.hotmint` |
 | `node --proxy-app <ADDR>` | Unix socket address of the ABCI application | `unix:///tmp/hotmint.sock` |
-| `node --p2p-laddr <ADDR>` | P2P listen address (multiaddr format) | `/ip4/0.0.0.0/tcp/26656` |
-| `node --rpc-laddr <ADDR>` | JSON-RPC listen address | `127.0.0.1:26657` |
+| `node --p2p-laddr <ADDR>` | P2P listen address (multiaddr format) | `/ip4/0.0.0.0/tcp/20000` |
+| `node --rpc-laddr <ADDR>` | JSON-RPC listen address | `127.0.0.1:20001` |
 
 Examples:
 
@@ -122,8 +122,8 @@ cargo run --bin hotmint-node -- --home /data/mynode init
 # run a node with custom addresses
 cargo run --bin hotmint-node -- --home /data/mynode node \
     --proxy-app unix:///tmp/myapp.sock \
-    --p2p-laddr /ip4/0.0.0.0/tcp/26656 \
-    --rpc-laddr 0.0.0.0:26657
+    --p2p-laddr /ip4/0.0.0.0/tcp/20000 \
+    --rpc-laddr 0.0.0.0:20001
 ```
 
 ## Next Steps

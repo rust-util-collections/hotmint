@@ -50,13 +50,13 @@ impl Default for NodeModeConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RpcConfig {
-    /// JSON-RPC listen address (e.g., "127.0.0.1:26657").
+    /// JSON-RPC listen address (e.g., "127.0.0.1:20001").
     pub laddr: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct P2pConfig {
-    /// P2P listen address as a multiaddr (e.g., "/ip4/0.0.0.0/tcp/26656").
+    /// P2P listen address as a multiaddr (e.g., "/ip4/0.0.0.0/tcp/20000").
     pub laddr: String,
     /// Persistent peers: `"<validator_id>@<multiaddr>"`.
     pub persistent_peers: Vec<String>,
@@ -83,10 +83,10 @@ impl Default for NodeConfig {
             proxy_app: "unix:///tmp/hotmint/app.sock".into(),
             node: NodeModeConfig::default(),
             rpc: RpcConfig {
-                laddr: "127.0.0.1:26657".into(),
+                laddr: "127.0.0.1:20001".into(),
             },
             p2p: P2pConfig {
-                laddr: "/ip4/0.0.0.0/tcp/26656".into(),
+                laddr: "/ip4/0.0.0.0/tcp/20000".into(),
                 persistent_peers: vec![],
                 private_peer_ids: vec![],
             },
@@ -362,7 +362,7 @@ pub type PeerNetworkInfo = (PeerMap, Vec<(PeerId, Vec<Multiaddr>)>);
 
 /// Parse persistent_peers from config into PeerMap + known_addresses.
 ///
-/// Format: `"<validator_id>@<multiaddr>"`, e.g., `"0@/ip4/10.0.0.1/tcp/26656"`.
+/// Format: `"<validator_id>@<multiaddr>"`, e.g., `"0@/ip4/10.0.0.1/tcp/20000"`.
 /// The PeerId is derived from the validator's public key in the genesis doc.
 pub fn parse_persistent_peers(peers: &[String], genesis: &GenesisDoc) -> Result<PeerNetworkInfo> {
     let mut peer_map = PeerMap::new();

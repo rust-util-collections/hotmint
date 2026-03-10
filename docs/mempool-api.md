@@ -108,7 +108,7 @@ let rpc_state = RpcState {
     validator_set_rx,
 };
 
-let server = RpcServer::bind("127.0.0.1:26657", rpc_state).await.unwrap();
+let server = RpcServer::bind("127.0.0.1:20001", rpc_state).await.unwrap();
 let addr = server.local_addr(); // actual bound address (useful if port was 0)
 tokio::spawn(async move { server.run().await });
 ```
@@ -184,7 +184,7 @@ Returns the current node status.
 
 Request:
 ```bash
-echo '{"method":"status","params":{},"id":1}' | nc 127.0.0.1 26657
+echo '{"method":"status","params":{},"id":1}' | nc 127.0.0.1 20001
 ```
 
 Response:
@@ -207,7 +207,7 @@ Submit a transaction (hex-encoded bytes).
 
 Request:
 ```bash
-echo '{"method":"submit_tx","params":"48656c6c6f","id":2}' | nc 127.0.0.1 26657
+echo '{"method":"submit_tx","params":"48656c6c6f","id":2}' | nc 127.0.0.1 20001
 ```
 
 Response:
@@ -227,7 +227,7 @@ Returns a committed block by height.
 
 Request:
 ```bash
-echo '{"method":"get_block","params":{"height":5},"id":3}' | nc 127.0.0.1 26657
+echo '{"method":"get_block","params":{"height":5},"id":3}' | nc 127.0.0.1 20001
 ```
 
 #### `get_block_by_hash`
@@ -236,7 +236,7 @@ Returns a committed block by its hash (hex-encoded).
 
 Request:
 ```bash
-echo '{"method":"get_block_by_hash","params":{"hash":"abcd1234..."},"id":4}' | nc 127.0.0.1 26657
+echo '{"method":"get_block_by_hash","params":{"hash":"abcd1234..."},"id":4}' | nc 127.0.0.1 20001
 ```
 
 #### `get_validators`
@@ -245,7 +245,7 @@ Returns the current validator set.
 
 Request:
 ```bash
-echo '{"method":"get_validators","params":{},"id":5}' | nc 127.0.0.1 26657
+echo '{"method":"get_validators","params":{},"id":5}' | nc 127.0.0.1 20001
 ```
 
 #### `get_epoch`
@@ -254,7 +254,7 @@ Returns the current epoch number and metadata.
 
 Request:
 ```bash
-echo '{"method":"get_epoch","params":{},"id":6}' | nc 127.0.0.1 26657
+echo '{"method":"get_epoch","params":{},"id":6}' | nc 127.0.0.1 20001
 ```
 
 #### `get_peers`
@@ -263,7 +263,7 @@ Returns the list of connected peers and their status.
 
 Request:
 ```bash
-echo '{"method":"get_peers","params":{},"id":7}' | nc 127.0.0.1 26657
+echo '{"method":"get_peers","params":{},"id":7}' | nc 127.0.0.1 20001
 ```
 
 ### Types
@@ -372,7 +372,7 @@ async fn main() {
         peer_info_rx,
         validator_set_rx,
     };
-    let server = RpcServer::bind("127.0.0.1:26657", rpc_state).await.unwrap();
+    let server = RpcServer::bind("127.0.0.1:20001", rpc_state).await.unwrap();
     println!("RPC listening on {}", server.local_addr());
     tokio::spawn(async move { server.run().await });
 

@@ -59,13 +59,13 @@ let removed_peer: Option<PeerId> = peer_map.remove(ValidatorId(2));
 ```rust
 use hotmint::network::service::NetworkService;
 
-let listen_addr = "/ip4/0.0.0.0/tcp/26656".parse().unwrap();
+let listen_addr = "/ip4/0.0.0.0/tcp/20000".parse().unwrap();
 
 let known_addresses = vec![
-    (peer_id_0, vec!["/ip4/10.0.0.1/tcp/26656".parse().unwrap()]),
-    (peer_id_1, vec!["/ip4/10.0.0.2/tcp/26656".parse().unwrap()]),
-    (peer_id_2, vec!["/ip4/10.0.0.3/tcp/26656".parse().unwrap()]),
-    (peer_id_3, vec!["/ip4/10.0.0.4/tcp/26656".parse().unwrap()]),
+    (peer_id_0, vec!["/ip4/10.0.0.1/tcp/20000".parse().unwrap()]),
+    (peer_id_1, vec!["/ip4/10.0.0.2/tcp/20000".parse().unwrap()]),
+    (peer_id_2, vec!["/ip4/10.0.0.3/tcp/20000".parse().unwrap()]),
+    (peer_id_3, vec!["/ip4/10.0.0.4/tcp/20000".parse().unwrap()]),
 ];
 
 let (net_service, network_sink, msg_rx, sync_req_rx, sync_resp_rx, peer_info_rx, connected_count_rx) =
@@ -244,7 +244,7 @@ The `Litep2pNetworkSink` supports adding and removing peers at runtime via `NetC
 network_sink.add_peer(
     ValidatorId(4),
     new_peer_id,
-    vec!["/ip4/10.0.0.5/tcp/26656".parse().unwrap()],
+    vec!["/ip4/10.0.0.5/tcp/20000".parse().unwrap()],
 );
 
 // remove a peer at runtime
