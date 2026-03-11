@@ -151,6 +151,7 @@ async fn run(home: &std::path::Path) -> Result<()> {
                 pex.private_peer_ids = config.p2p.private_peer_ids.clone();
                 pex
             },
+            config.node.relay_consensus,
         )?
     };
 

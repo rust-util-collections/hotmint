@@ -122,6 +122,8 @@ pub struct NetworkService {
     persistent_peers: HashMap<ValidatorId, PeerId>,
     /// Addresses to dial at startup (from persistent_peers config).
     initial_dial_addresses: Vec<Multiaddr>,
+    /// Whether to relay received consensus messages to other connected peers.
+    relay_consensus: bool,
     msg_tx: mpsc::Sender<(ValidatorId, ConsensusMessage)>,
     cmd_rx: mpsc::Receiver<NetCommand>,
     sync_req_tx: mpsc::Sender<IncomingSyncRequest>,
@@ -140,6 +142,7 @@ impl NetworkService {
         keypair: Option<litep2p::crypto::ed25519::Keypair>,
         peer_book: Arc<RwLock<PeerBook>>,
         pex_config: PexConfig,
+        relay_consensus: bool,
     ) -> Result<NetworkServiceHandles> {
         let (notif_config, notif_handle) = NotifConfigBuilder::new(NOTIF_PROTOCOL.into())
             .with_max_size(MAX_NOTIFICATION_SIZE)
@@ -236,6 +239,7 @@ impl NetworkService {
                 pex_config,
                 persistent_peers,
                 initial_dial_addresses,
+                relay_consensus,
                 msg_tx,
                 cmd_rx,
                 sync_req_tx,
@@ -326,14 +330,30 @@ impl NetworkService {
                 debug!(peer = %peer, "notification stream closed");
             }
             NotificationEvent::NotificationReceived { peer, notification } => {
-                let Some(sender) = self.peer_map.peer_to_validator.get(&peer).copied() else {
-                    warn!(peer = %peer, "dropping notification from unknown peer");
-                    return;
-                };
+                // Determine the sender ValidatorId (if from a known validator)
+                let sender = self
+                    .peer_map
+                    .peer_to_validator
+                    .get(&peer)
+                    .copied()
+                    .unwrap_or(ValidatorId(u64::MAX));
+
                 match codec::decode::<ConsensusMessage>(&notification) {
                     Ok(msg) => {
                         if let Err(e) = self.msg_tx.try_send((sender, msg)) {
                             warn!("consensus message dropped (notification): {e}");
+                        }
+
+                        // Relay: re-broadcast to other connected peers
+                        if self.relay_consensus {
+                            let raw = notification.to_vec();
+                            for &other in &self.connected_peers {
+                                if other != peer {
+                                    let _ = self
+                                        .notif_handle
+                                        .send_sync_notification(other, raw.clone());
+                                }
+                            }
                         }
                     }
                     Err(e) => {

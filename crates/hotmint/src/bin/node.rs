@@ -310,6 +310,7 @@ async fn run_node(
                 pex.private_peer_ids = config.p2p.private_peer_ids.clone();
                 pex
             },
+            config.node.relay_consensus,
         )?
     };
 
