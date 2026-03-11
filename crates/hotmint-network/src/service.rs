@@ -131,6 +131,8 @@ pub struct NetworkService {
     peer_info_tx: watch::Sender<Vec<PeerStatus>>,
     connected_count_tx: watch::Sender<usize>,
     connected_peers: std::collections::HashSet<PeerId>,
+    /// Recently seen message hashes for relay deduplication (prevents infinite relay loops).
+    seen_messages: std::collections::HashSet<u64>,
 }
 
 impl NetworkService {
@@ -247,6 +249,7 @@ impl NetworkService {
                 peer_info_tx,
                 connected_count_tx,
                 connected_peers: std::collections::HashSet::new(),
+                seen_messages: std::collections::HashSet::new(),
             },
             sink,
             msg_rx,
@@ -344,14 +347,26 @@ impl NetworkService {
                             warn!("consensus message dropped (notification): {e}");
                         }
 
-                        // Relay: re-broadcast to other connected peers
+                        // Relay: re-broadcast to other connected peers (with dedup)
                         if self.relay_consensus {
-                            let raw = notification.to_vec();
-                            for &other in &self.connected_peers {
-                                if other != peer {
-                                    let _ = self
-                                        .notif_handle
-                                        .send_sync_notification(other, raw.clone());
+                            use std::hash::{Hash, Hasher};
+                            let mut hasher = std::hash::DefaultHasher::new();
+                            notification.hash(&mut hasher);
+                            let msg_hash = hasher.finish();
+
+                            if self.seen_messages.insert(msg_hash) {
+                                // First time seeing this message — relay it
+                                let raw = notification.to_vec();
+                                for &other in &self.connected_peers {
+                                    if other != peer {
+                                        let _ = self
+                                            .notif_handle
+                                            .send_sync_notification(other, raw.clone());
+                                    }
+                                }
+                                // Prevent unbounded growth: prune when too large
+                                if self.seen_messages.len() > 10_000 {
+                                    self.seen_messages.clear();
                                 }
                             }
                         }
