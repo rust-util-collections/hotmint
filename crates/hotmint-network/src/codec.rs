@@ -22,11 +22,11 @@ const TAG_RAW: u8 = 0x00;
 const TAG_ZSTD: u8 = 0x01;
 
 /// Serialize a value to CBOR, then conditionally zstd-compress.
-pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, serde_cbor_2::Error> {
-    let cbor = serde_cbor_2::to_vec(value)?;
+pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, EncodeError> {
+    let cbor = serde_cbor_2::to_vec(value).map_err(EncodeError::Cbor)?;
     if cbor.len() > COMPRESS_THRESHOLD {
-        // Unwrap safety: zstd::encode_all only fails on invalid level or I/O error on a Vec
-        let compressed = zstd::encode_all(cbor.as_slice(), ZSTD_LEVEL).unwrap();
+        let compressed =
+            zstd::encode_all(cbor.as_slice(), ZSTD_LEVEL).map_err(EncodeError::Zstd)?;
         let mut out = Vec::with_capacity(1 + compressed.len());
         out.push(TAG_ZSTD);
         out.extend_from_slice(&compressed);
@@ -75,6 +75,23 @@ impl std::fmt::Display for DecodeError {
 }
 
 impl std::error::Error for DecodeError {}
+
+#[derive(Debug)]
+pub enum EncodeError {
+    Cbor(serde_cbor_2::Error),
+    Zstd(std::io::Error),
+}
+
+impl std::fmt::Display for EncodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cbor(e) => write!(f, "cbor: {e}"),
+            Self::Zstd(e) => write!(f, "zstd: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for EncodeError {}
 
 #[cfg(test)]
 mod tests {
