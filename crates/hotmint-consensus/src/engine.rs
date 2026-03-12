@@ -550,36 +550,7 @@ impl ConsensusEngine {
                         }
 
                         // Fast-forward via double cert
-                        let store = self.store.read().unwrap();
-                        match try_commit(
-                            dc,
-                            store.as_ref(),
-                            self.app.as_ref(),
-                            &mut self.state.last_committed_height,
-                            &self.state.current_epoch,
-                        ) {
-                            Ok(result) => {
-                                if !result.committed_blocks.is_empty() {
-                                    self.state.last_app_hash = result.last_app_hash;
-                                }
-                                if result.pending_epoch.is_some() {
-                                    self.pending_epoch = result.pending_epoch;
-                                }
-                                drop(store);
-                                // Store commit QC for sync protocol + flush
-                                {
-                                    let mut s = self.store.write().unwrap();
-                                    for block in &result.committed_blocks {
-                                        s.put_commit_qc(block.height, result.commit_qc.clone());
-                                    }
-                                    s.flush();
-                                }
-                            }
-                            Err(e) => {
-                                warn!(error = %e, "try_commit failed during fast-forward");
-                                drop(store);
-                            }
-                        }
+                        self.apply_commit(dc, "fast-forward");
                         self.state.highest_double_cert = Some(dc.clone());
                         self.advance_view_to(block.view, ViewEntryTrigger::DoubleCert(dc.clone()));
                     } else {
@@ -848,37 +819,7 @@ impl ConsensusEngine {
         );
 
         // Commit
-        {
-            let store = self.store.read().unwrap();
-            match try_commit(
-                &dc,
-                store.as_ref(),
-                self.app.as_ref(),
-                &mut self.state.last_committed_height,
-                &self.state.current_epoch,
-            ) {
-                Ok(result) => {
-                    if !result.committed_blocks.is_empty() {
-                        self.state.last_app_hash = result.last_app_hash;
-                    }
-                    if result.pending_epoch.is_some() {
-                        self.pending_epoch = result.pending_epoch;
-                    }
-                    drop(store);
-                    {
-                        let mut s = self.store.write().unwrap();
-                        for block in &result.committed_blocks {
-                            s.put_commit_qc(block.height, result.commit_qc.clone());
-                        }
-                        s.flush();
-                    }
-                }
-                Err(e) => {
-                    warn!(error = %e, "try_commit failed in double cert handler");
-                    drop(store);
-                }
-            }
-        }
+        self.apply_commit(&dc, "double-cert");
 
         self.state.highest_double_cert = Some(dc.clone());
 
@@ -934,6 +875,40 @@ impl ConsensusEngine {
 
         // Exponential backoff on repeated timeouts
         self.pacemaker.on_timeout();
+    }
+
+    /// Apply the result of a successful try_commit: update app_hash, pending epoch,
+    /// store commit QCs, and flush. Called from both normal and fast-forward commit paths.
+    fn apply_commit(&mut self, dc: &DoubleCertificate, context: &str) {
+        let store = self.store.read().unwrap();
+        match try_commit(
+            dc,
+            store.as_ref(),
+            self.app.as_ref(),
+            &mut self.state.last_committed_height,
+            &self.state.current_epoch,
+        ) {
+            Ok(result) => {
+                if !result.committed_blocks.is_empty() {
+                    self.state.last_app_hash = result.last_app_hash;
+                }
+                if result.pending_epoch.is_some() {
+                    self.pending_epoch = result.pending_epoch;
+                }
+                drop(store);
+                {
+                    let mut s = self.store.write().unwrap();
+                    for block in &result.committed_blocks {
+                        s.put_commit_qc(block.height, result.commit_qc.clone());
+                    }
+                    s.flush();
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "try_commit failed during {context}");
+                drop(store);
+            }
+        }
     }
 
     fn persist_state(&mut self) {
