@@ -227,8 +227,8 @@ async fn run_node(
         ValidatorId(gv.id)
     } else {
         is_fullnode = true;
-        // Use priv_key.validator_id as a unique sentinel (not in the active set).
-        ValidatorId(priv_key.validator_id)
+        // Use u64::MAX as sentinel to avoid collision with any real validator ID.
+        ValidatorId(u64::MAX)
     };
 
     if is_fullnode {
