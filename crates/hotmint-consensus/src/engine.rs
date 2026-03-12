@@ -887,16 +887,20 @@ impl ConsensusEngine {
     }
 
     fn handle_timeout(&mut self) {
-        // Only broadcast wishes if we have voting power (avoid network spam from fullnodes)
+        // Skip wish building/signing entirely when we have no voting power (fullnodes).
+        // build_wish involves a cryptographic signing operation that serves no purpose
+        // when the wish will never be broadcast or counted toward a TC.
         let has_power = self.state.validator_set.power_of(self.state.validator_id) > 0;
-
-        if has_power {
-            info!(
-                validator = %self.state.validator_id,
-                view = %self.state.current_view,
-                "view timeout, sending wish"
-            );
+        if !has_power {
+            self.pacemaker.on_timeout();
+            return;
         }
+
+        info!(
+            validator = %self.state.validator_id,
+            view = %self.state.current_view,
+            "view timeout, sending wish"
+        );
 
         let wish = self.pacemaker.build_wish(
             self.state.current_view,
@@ -905,9 +909,7 @@ impl ConsensusEngine {
             self.signer.as_ref(),
         );
 
-        if has_power {
-            self.network.broadcast(wish.clone());
-        }
+        self.network.broadcast(wish.clone());
 
         // Also process our own wish
         if let ConsensusMessage::Wish {
