@@ -272,21 +272,15 @@ async fn run(home: &std::path::Path) -> Result<()> {
         }
 
         if *count_rx.borrow() > 0 {
-            let first_peer_vid = config
+            // Collect all peers' PeerIds from persistent_peers config
+            let sync_peers: Vec<(ValidatorId, litep2p::PeerId)> = config
                 .p2p
                 .persistent_peers
-                .first()
-                .and_then(|p| p.split_once('@'))
-                .and_then(|(id, _)| id.parse::<u64>().ok())
-                .map(ValidatorId);
-
-            if let Some(vid) = first_peer_vid {
-                let bridge_sink = sync_sink.clone();
-                let (sync_tx, mut sync_bridge_rx) =
-                    tokio::sync::mpsc::channel::<hotmint_types::sync::SyncRequest>(16);
-
-                let sync_peer_id =
-                    genesis
+                .iter()
+                .filter_map(|p| {
+                    let (id_str, _) = p.split_once('@')?;
+                    let vid = ValidatorId(id_str.parse::<u64>().ok()?);
+                    let peer_id = genesis
                         .validators
                         .iter()
                         .find(|v| v.id == vid.0)
@@ -295,34 +289,53 @@ async fn run(home: &std::path::Path) -> Result<()> {
                             let lpk =
                                 litep2p::crypto::ed25519::PublicKey::try_from_bytes(&pk).ok()?;
                             Some(lpk.to_peer_id())
-                        });
+                        })?;
+                    Some((vid, peer_id))
+                })
+                .collect();
 
-                if let Some(peer_id) = sync_peer_id {
-                    let bridge = tokio::spawn(async move {
-                        while let Some(req) = sync_bridge_rx.recv().await {
-                            bridge_sink.send_sync_request(peer_id, &req);
-                        }
-                    });
+            // Try syncing from each peer in order until one succeeds
+            let mut synced = false;
+            for (vid, peer_id) in &sync_peers {
+                let bridge_sink = sync_sink.clone();
+                let pid = *peer_id;
+                let (sync_tx, mut sync_bridge_rx) =
+                    tokio::sync::mpsc::channel::<hotmint_types::sync::SyncRequest>(16);
 
-                    info!("starting block sync with V{}", vid.0);
-                    let sync_app = NoopApplication;
-                    let mut sync_store = VsdbBlockStore::new();
-                    let mut engine_state_app_hash = hotmint_types::BlockHash::GENESIS;
-                    if let Err(e) = hotmint::consensus::sync::sync_to_tip(
-                        &mut sync_store,
-                        &sync_app,
-                        &mut engine_state_epoch,
-                        &mut engine_state_height,
-                        &mut engine_state_app_hash,
-                        &sync_tx,
-                        &mut sync_resp_rx,
-                    )
-                    .await
-                    {
-                        info!(%e, "sync completed with error, continuing from current state");
+                let bridge = tokio::spawn(async move {
+                    while let Some(req) = sync_bridge_rx.recv().await {
+                        bridge_sink.send_sync_request(pid, &req);
                     }
-                    bridge.abort();
+                });
+
+                info!("starting block sync with V{}", vid.0);
+                let sync_app = NoopApplication;
+                let mut sync_store = VsdbBlockStore::new();
+                let mut engine_state_app_hash = hotmint_types::BlockHash::GENESIS;
+                match hotmint::consensus::sync::sync_to_tip(
+                    &mut sync_store,
+                    &sync_app,
+                    &mut engine_state_epoch,
+                    &mut engine_state_height,
+                    &mut engine_state_app_hash,
+                    &sync_tx,
+                    &mut sync_resp_rx,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        bridge.abort();
+                        synced = true;
+                        break;
+                    }
+                    Err(e) => {
+                        info!(%e, peer = vid.0, "sync from peer failed, trying next");
+                        bridge.abort();
+                    }
                 }
+            }
+            if !synced && !sync_peers.is_empty() {
+                info!("all sync peers failed, continuing from current state");
             }
         }
     }
@@ -332,9 +345,15 @@ async fn run(home: &std::path::Path) -> Result<()> {
     state.current_epoch = engine_state_epoch;
     state.validator_set = state.current_epoch.validator_set.clone();
 
-    // Advance current_view to match synced height
+    // Advance current_view to match synced state using the actual block.view
+    // (accurate even when the network experienced view timeouts where view >> height).
     if engine_state_height > Height::GENESIS {
-        let synced_view = ViewNumber(engine_state_height.as_u64() + 1);
+        let synced_view = {
+            let s = store.read().unwrap();
+            s.get_block_by_height(engine_state_height)
+                .map(|b| ViewNumber(b.view.as_u64() + 1))
+                .unwrap_or(ViewNumber(engine_state_height.as_u64() + 1))
+        };
         if synced_view > state.current_view {
             info!(
                 synced_view = synced_view.as_u64(),
