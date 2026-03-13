@@ -1,6 +1,7 @@
 use ruc::*;
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 use futures::StreamExt;
 use hotmint_consensus::network::NetworkSink;
@@ -131,8 +132,13 @@ pub struct NetworkService {
     peer_info_tx: watch::Sender<Vec<PeerStatus>>,
     connected_count_tx: watch::Sender<usize>,
     connected_peers: std::collections::HashSet<PeerId>,
-    /// Recently seen message hashes for relay deduplication (prevents infinite relay loops).
-    seen_messages: std::collections::HashSet<u64>,
+    /// Two-set rotation for relay deduplication: when the active set fills up,
+    /// swap it to the backup position (clearing the old backup). Messages are
+    /// checked against both sets, so recent history is always preserved across
+    /// rotations. This avoids the brief relay-window that a single-set clear
+    /// would create.
+    seen_active: std::collections::HashSet<u64>,
+    seen_backup: std::collections::HashSet<u64>,
 }
 
 impl NetworkService {
@@ -249,7 +255,8 @@ impl NetworkService {
                 peer_info_tx,
                 connected_count_tx,
                 connected_peers: std::collections::HashSet::new(),
-                seen_messages: std::collections::HashSet::new(),
+                seen_active: std::collections::HashSet::new(),
+                seen_backup: std::collections::HashSet::new(),
             },
             sink,
             msg_rx,
@@ -347,15 +354,17 @@ impl NetworkService {
                             warn!("consensus message dropped (notification): {e}");
                         }
 
-                        // Relay: re-broadcast to other connected peers (with dedup)
+                        // Relay: re-broadcast to other connected peers (with two-set dedup)
                         if self.relay_consensus {
-                            use std::hash::{Hash, Hasher};
                             let mut hasher = std::hash::DefaultHasher::new();
                             notification.hash(&mut hasher);
                             let msg_hash = hasher.finish();
 
-                            if self.seen_messages.insert(msg_hash) {
-                                // First time seeing this message — relay it
+                            // Check both sets to avoid re-relay across rotations
+                            if !self.seen_active.contains(&msg_hash)
+                                && !self.seen_backup.contains(&msg_hash)
+                            {
+                                self.seen_active.insert(msg_hash);
                                 let raw = notification.to_vec();
                                 for &other in &self.connected_peers {
                                     if other != peer {
@@ -364,9 +373,9 @@ impl NetworkService {
                                             .send_sync_notification(other, raw.clone());
                                     }
                                 }
-                                // Prevent unbounded growth: prune when too large
-                                if self.seen_messages.len() > 10_000 {
-                                    self.seen_messages.clear();
+                                // Rotate: move active→backup, clear old backup
+                                if self.seen_active.len() > 10_000 {
+                                    self.seen_backup = std::mem::take(&mut self.seen_active);
                                 }
                             }
                         }
