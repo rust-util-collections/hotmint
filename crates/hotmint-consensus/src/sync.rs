@@ -121,44 +121,6 @@ pub async fn sync_to_tip(
     Ok(())
 }
 
-/// Mutable state for `run_sync_loop`.
-pub struct SyncLoopState<'a> {
-    pub store: &'a mut dyn BlockStore,
-    pub app: &'a dyn Application,
-    pub current_epoch: &'a mut Epoch,
-    pub last_committed_height: &'a mut Height,
-    pub last_app_hash: &'a mut BlockHash,
-    pub request_tx: &'a mpsc::Sender<SyncRequest>,
-    pub response_rx: &'a mut mpsc::Receiver<SyncResponse>,
-}
-
-/// Run a continuous sync loop for fullnode mode.
-///
-/// Polls `sync_to_tip()` at a regular interval, keeping the fullnode's
-/// block store and application state up to date with the validator cluster.
-/// This function never returns.
-pub async fn run_sync_loop(s: &mut SyncLoopState<'_>, poll_interval: Duration) {
-    loop {
-        match sync_to_tip(
-            s.store,
-            s.app,
-            s.current_epoch,
-            s.last_committed_height,
-            s.last_app_hash,
-            s.request_tx,
-            s.response_rx,
-        )
-        .await
-        {
-            Ok(()) => {}
-            Err(e) => {
-                tracing::warn!(%e, "sync round failed, will retry");
-            }
-        }
-        tokio::time::sleep(poll_interval).await;
-    }
-}
-
 /// Replay a batch of blocks: store them and run the application lifecycle.
 /// Validates chain continuity (parent_hash linkage).
 pub fn replay_blocks(
