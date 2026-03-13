@@ -18,6 +18,7 @@ members = [
     "examples/bench-ipc",
     "examples/utxo-chain",
     "examples/cluster-node",
+    "tools/hotmint-mgmt",
 ]
 
 [workspace.package]
