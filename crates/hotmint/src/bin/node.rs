@@ -484,8 +484,12 @@ async fn run_node(
                 })
                 .collect();
 
-            // Try syncing from each peer in order until one succeeds
+            // Try syncing from each peer in order until one succeeds.
+            // Use the main store so synced blocks are available for:
+            // - accurate view estimation after sync
+            // - serving sync requests to other nodes
             let mut synced = false;
+            let mut engine_state_app_hash = hotmint_types::BlockHash::GENESIS;
             for (vid, peer_id) in &sync_peers {
                 let bridge_sink = sync_sink.clone();
                 let pid = *peer_id;
@@ -498,11 +502,13 @@ async fn run_node(
                     }
                 });
 
+                // Drain any residual responses from a previous peer iteration
+                while sync_resp_rx.try_recv().is_ok() {}
+
                 info!("starting block sync with V{}", vid.0);
-                let mut sync_store = VsdbBlockStore::new();
-                let mut engine_state_app_hash = hotmint_types::BlockHash::GENESIS;
+                let mut store_guard = store.write().unwrap();
                 match hotmint::consensus::sync::sync_to_tip(
-                    &mut sync_store,
+                    store_guard.as_mut(),
                     sync_app_box.as_ref(),
                     &mut engine_state_epoch,
                     &mut engine_state_height,
@@ -513,11 +519,13 @@ async fn run_node(
                 .await
                 {
                     Ok(()) => {
+                        drop(store_guard);
                         bridge.abort();
                         synced = true;
                         break;
                     }
                     Err(e) => {
+                        drop(store_guard);
                         info!(%e, peer = vid.0, "sync from peer failed, trying next");
                         bridge.abort();
                     }
