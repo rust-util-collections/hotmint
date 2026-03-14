@@ -223,7 +223,7 @@ async fn run_node(
         .iter()
         .find(|v| &v.public_key == our_pk_hex)
     {
-        is_fullnode = config.node.mode == "fullnode";
+        is_fullnode = config.node.mode == config::NodeMode::Fullnode;
         ValidatorId(gv.id)
     } else {
         is_fullnode = true;

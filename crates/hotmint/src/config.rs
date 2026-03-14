@@ -21,11 +21,19 @@ pub struct NodeConfig {
     pub mempool: MempoolConfig,
 }
 
+/// Node operating mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NodeMode {
+    Validator,
+    Fullnode,
+}
+
 /// Node identity and role configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeModeConfig {
-    /// Node operating mode: "validator" or "fullnode".
-    pub mode: String,
+    /// Node operating mode.
+    pub mode: NodeMode,
     /// Whether to relay consensus messages to other peers.
     pub relay_consensus: bool,
     /// Whether to relay transactions to other peers.
@@ -39,7 +47,7 @@ pub struct NodeModeConfig {
 impl Default for NodeModeConfig {
     fn default() -> Self {
         Self {
-            mode: "validator".into(),
+            mode: NodeMode::Validator,
             relay_consensus: true,
             relay_transactions: true,
             serve_rpc: true,
