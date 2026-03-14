@@ -1,9 +1,12 @@
 //! Local multi-node cluster management: start, stop, status.
 
-use ruc::*;
-use std::io::Read as _;
+use std::io::{Read as _, Write};
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process;
+use std::time::Duration;
+
+use ruc::*;
 
 use crate::cluster::ClusterState;
 
@@ -20,7 +23,7 @@ fn find_binary(binary: Option<&Path>) -> Result<PathBuf> {
     let workspace_bin = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/release/cluster-node");
     if workspace_bin.exists() {
-        return Ok(workspace_bin.canonicalize().c(d!())?);
+        return workspace_bin.canonicalize().c(d!());
     }
 
     // Try PATH
@@ -84,12 +87,11 @@ pub fn start(base_dir: &Path, node: Option<u32>, binary: Option<&Path>) -> Resul
 
     for v in &nodes {
         // Check if already running
-        if let Some(pid) = read_pid(base_dir, v.id) {
-            if is_running(pid) {
+        if let Some(pid) = read_pid(base_dir, v.id)
+            && is_running(pid) {
                 println!("V{}: already running (pid {})", v.id, pid);
                 continue;
             }
-        }
 
         let log_file = base_dir.join(format!("v{}.log", v.id));
         let log = std::fs::File::create(&log_file).c(d!("create log file"))?;
@@ -163,7 +165,7 @@ pub fn status(base_dir: &Path) -> Result<()> {
 
     for v in &state.validators {
         let running = read_pid(base_dir, v.id)
-            .map(|pid| is_running(pid))
+            .map(is_running)
             .unwrap_or(false);
 
         let status_str = if running { "RUNNING" } else { "STOPPED" };
@@ -192,10 +194,6 @@ pub fn status(base_dir: &Path) -> Result<()> {
 }
 
 fn query_rpc_status(host: &str, port: u16) -> Result<String> {
-    use std::io::Write;
-    use std::net::TcpStream;
-    use std::time::Duration;
-
     let addr = format!("{}:{}", host, port);
     let mut stream =
         TcpStream::connect_timeout(&addr.parse().c(d!())?, Duration::from_secs(2)).c(d!())?;
@@ -211,8 +209,8 @@ fn query_rpc_status(host: &str, port: u16) -> Result<String> {
     let mut response = String::new();
     let _ = stream.read_to_string(&mut response);
 
-    if let Ok(val) = serde_json::from_str::<serde_json::Value>(response.trim()) {
-        if let Some(result) = val.get("result") {
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(response.trim())
+        && let Some(result) = val.get("result") {
             let height = result
                 .get("last_committed_height")
                 .and_then(|v| v.as_u64())
@@ -224,6 +222,5 @@ fn query_rpc_status(host: &str, port: u16) -> Result<String> {
             let epoch = result.get("epoch").and_then(|v| v.as_u64()).unwrap_or(0);
             return Ok(format!("height={} view={} epoch={}", height, view, epoch));
         }
-    }
     Err(eg!("could not parse RPC response"))
 }
