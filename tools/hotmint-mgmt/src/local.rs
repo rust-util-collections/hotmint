@@ -64,6 +64,20 @@ fn is_running(pid: u32) -> bool {
     unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
+/// Verify a PID belongs to a cluster-node process (prevents killing unrelated processes
+/// if the PID was recycled after the node exited).
+fn is_cluster_node(pid: u32) -> bool {
+    // On macOS/BSD/Linux, check /proc or ps for the process name
+    process::Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "comm="])
+        .output()
+        .map(|out| {
+            let name = String::from_utf8_lossy(&out.stdout);
+            name.trim().contains("cluster-node") || name.trim().contains("hotmint")
+        })
+        .unwrap_or(false)
+}
+
 mod libc {
     unsafe extern "C" {
         pub fn kill(pid: i32, sig: i32) -> i32;
@@ -135,11 +149,13 @@ pub fn stop(base_dir: &Path, node: Option<u32>) -> Result<()> {
 
     for v in &nodes {
         if let Some(pid) = read_pid(base_dir, v.id) {
-            if is_running(pid) {
+            if is_running(pid) && is_cluster_node(pid) {
                 unsafe {
                     libc::kill(pid as i32, 15); // SIGTERM
                 }
                 println!("V{}: stopped (pid {})", v.id, pid);
+            } else if is_running(pid) {
+                println!("V{}: pid {} is not a cluster-node (stale pid file?)", v.id, pid);
             } else {
                 println!("V{}: not running", v.id);
             }

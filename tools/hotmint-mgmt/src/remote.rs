@@ -150,7 +150,7 @@ pub fn deploy(
                 if local_file.exists() {
                     let status = process::Command::new("scp")
                         .args(["-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes"])
-                        .arg(local_file.to_str().unwrap())
+                        .arg(&local_file)
                         .arg(format!("{}:{}/config/{}", host.ssh, remote_home, file))
                         .status()
                         .c(d!("scp config"))?;
@@ -161,28 +161,27 @@ pub fn deploy(
             }
         }
 
-        // 3. Build on remote
-        println!(
-            "  Building {} on {}...",
-            package, host.ssh
-        );
+        // 3. Build on remote (use set -o pipefail so build failure propagates through pipe)
+        println!("  Building {} on {}...", package, host.ssh);
         let build_output = ssh_exec(
             &host.ssh,
             &format!(
-                "cd {} && cargo build --release -p {} 2>&1 | tail -3",
+                "set -o pipefail; cd {} && cargo build --release -p {} 2>&1 | tail -5",
                 remote_src, package
             ),
         )?;
         println!("  {}", build_output.trim());
 
-        // 4. Start the node
+        // 4. Stop any existing node, then start
         println!("  Starting V{}...", vid);
         let bin_path = format!("{}/target/release/{}", remote_src, package);
+        // Use a PID file for targeted stop instead of broad pkill pattern
+        let pid_file = format!("/tmp/hotmint-v{}.pid", vid);
         ssh_exec(
             &host.ssh,
             &format!(
-                "pkill -f '{} --home {}' 2>/dev/null; sleep 1; nohup {} --home {} > /tmp/hotmint-v{}.log 2>&1 &",
-                package, remote_home, bin_path, remote_home, vid,
+                "if [ -f {pid_file} ]; then kill $(cat {pid_file}) 2>/dev/null; sleep 1; fi; \
+                 nohup {bin_path} --home {remote_home} > /tmp/hotmint-v{vid}.log 2>&1 & echo $! > {pid_file}",
             ),
         )?;
         println!("  V{}: started on {}", vid, host.ssh);
