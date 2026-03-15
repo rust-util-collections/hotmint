@@ -152,6 +152,11 @@ async fn run(home: &std::path::Path) -> Result<()> {
                 pex
             },
             config.node.relay_consensus,
+            validator_set
+                .validators()
+                .iter()
+                .map(|v| (v.id, v.public_key.clone()))
+                .collect(),
         )?
     };
 

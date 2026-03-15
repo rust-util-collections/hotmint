@@ -341,7 +341,79 @@ impl ConsensusEngine {
             Err(e) => warn!(error = %e, "failed to add self vote"),
         }
     }
+}
 
+/// Verify the per-sender individual signature on a consensus message before relaying.
+///
+/// Only checks signatures that can be attributed to a single known validator using the
+/// provided key map.  Aggregate certificates (TimeoutCert, justify/prepare QCs) are
+/// intentionally not fully re-verified here — the receiving engine always does the full
+/// check.  Messages whose signing bytes depend on receiver state (StatusCert needs
+/// `current_view`) are also allowed through; the engine will reject them if invalid.
+///
+/// Returns `false` when:
+/// - The claimed sender is not in `validator_keys` (unknown/non-validator peer), OR
+/// - The individual signature is cryptographically invalid.
+pub fn verify_relay_sender(
+    sender: ValidatorId,
+    msg: &ConsensusMessage,
+    validator_keys: &std::collections::HashMap<ValidatorId, hotmint_types::crypto::PublicKey>,
+) -> bool {
+    use hotmint_crypto::Ed25519Verifier;
+    use hotmint_types::vote::Vote;
+    use hotmint_types::Verifier;
+    let verifier = Ed25519Verifier;
+    match msg {
+        ConsensusMessage::Propose {
+            block,
+            justify,
+            signature,
+            ..
+        } => {
+            let Some(pk) = validator_keys.get(&block.proposer) else {
+                return false;
+            };
+            let bytes = crate::view_protocol::proposal_signing_bytes(block, justify);
+            Verifier::verify(&verifier, pk, &bytes, signature)
+        }
+        ConsensusMessage::VoteMsg(vote) | ConsensusMessage::Vote2Msg(vote) => {
+            let Some(pk) = validator_keys.get(&vote.validator) else {
+                return false;
+            };
+            let bytes = Vote::signing_bytes(vote.view, &vote.block_hash, vote.vote_type);
+            Verifier::verify(&verifier, pk, &bytes, &vote.signature)
+        }
+        ConsensusMessage::Prepare {
+            certificate,
+            signature,
+        } => {
+            // Prepare is broadcast by the current leader; the relay `sender` is the
+            // leader, so verify against the sender's key.
+            let Some(pk) = validator_keys.get(&sender) else {
+                return false;
+            };
+            let bytes = crate::view_protocol::prepare_signing_bytes(certificate);
+            Verifier::verify(&verifier, pk, &bytes, signature)
+        }
+        ConsensusMessage::Wish {
+            target_view,
+            validator,
+            signature,
+            ..
+        } => {
+            let Some(pk) = validator_keys.get(validator) else {
+                return false;
+            };
+            let bytes = crate::pacemaker::wish_signing_bytes(*target_view);
+            Verifier::verify(&verifier, pk, &bytes, signature)
+        }
+        // TimeoutCert: aggregate signature — engine verifies with full ValidatorSet.
+        // StatusCert: signing bytes need current_view — engine verifies.
+        ConsensusMessage::TimeoutCert(_) | ConsensusMessage::StatusCert { .. } => true,
+    }
+}
+
+impl ConsensusEngine {
     /// Verify the cryptographic signature on an inbound consensus message.
     /// Returns false (and logs a warning) if verification fails.
     /// Messages from past views are skipped (they'll be dropped by handle_message anyway).

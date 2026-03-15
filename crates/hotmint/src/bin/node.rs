@@ -311,6 +311,11 @@ async fn run_node(
                 pex
             },
             config.node.relay_consensus,
+            validator_set
+                .validators()
+                .iter()
+                .map(|v| (v.id, v.public_key.clone()))
+                .collect(),
         )?
     };
 

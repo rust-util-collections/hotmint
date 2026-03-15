@@ -125,6 +125,9 @@ pub struct NetworkService {
     initial_dial_addresses: Vec<Multiaddr>,
     /// Whether to relay received consensus messages to other connected peers.
     relay_consensus: bool,
+    /// Public keys of known validators, used to verify individual message signatures
+    /// before relaying.  Updated on epoch transitions via [`NetCommand::EpochChange`].
+    validator_keys: std::collections::HashMap<ValidatorId, hotmint_types::crypto::PublicKey>,
     msg_tx: mpsc::Sender<(ValidatorId, ConsensusMessage)>,
     cmd_rx: mpsc::Receiver<NetCommand>,
     sync_req_tx: mpsc::Sender<IncomingSyncRequest>,
@@ -151,6 +154,7 @@ impl NetworkService {
         peer_book: Arc<RwLock<PeerBook>>,
         pex_config: PexConfig,
         relay_consensus: bool,
+        initial_validators: Vec<(ValidatorId, hotmint_types::crypto::PublicKey)>,
     ) -> Result<NetworkServiceHandles> {
         let (notif_config, notif_handle) = NotifConfigBuilder::new(NOTIF_PROTOCOL.into())
             .with_max_size(MAX_NOTIFICATION_SIZE)
@@ -235,6 +239,9 @@ impl NetworkService {
         // Save persistent peers for auto-reconnect
         let persistent_peers: HashMap<ValidatorId, PeerId> = peer_map.validator_to_peer.clone();
 
+        let validator_keys: std::collections::HashMap<ValidatorId, hotmint_types::crypto::PublicKey> =
+            initial_validators.into_iter().collect();
+
         Ok(NetworkServiceHandles {
             service: Self {
                 litep2p,
@@ -248,6 +255,7 @@ impl NetworkService {
                 persistent_peers,
                 initial_dial_addresses,
                 relay_consensus,
+                validator_keys,
                 msg_tx,
                 cmd_rx,
                 sync_req_tx,
@@ -350,12 +358,22 @@ impl NetworkService {
 
                 match codec::decode::<ConsensusMessage>(&notification) {
                     Ok(msg) => {
-                        if let Err(e) = self.msg_tx.try_send((sender, msg)) {
+                        if let Err(e) = self.msg_tx.try_send((sender, msg.clone())) {
                             warn!("consensus message dropped (notification): {e}");
                         }
 
-                        // Relay: re-broadcast to other connected peers (with two-set dedup)
-                        if self.relay_consensus {
+                        // Relay: re-broadcast to other connected peers (with two-set dedup).
+                        // Only relay from known validators whose individual message signature
+                        // is valid, preventing unknown peers from using this node as a DoS
+                        // amplifier.
+                        if self.relay_consensus
+                            && sender.0 != u64::MAX
+                            && hotmint_consensus::engine::verify_relay_sender(
+                                sender,
+                                &msg,
+                                &self.validator_keys,
+                            )
+                        {
                             let mut hasher = std::hash::DefaultHasher::new();
                             notification.hash(&mut hasher);
                             let msg_hash = hasher.finish();
@@ -769,6 +787,8 @@ impl NetworkService {
                     info!(validator = %vid, "removing validator from peer_map after epoch change");
                     self.peer_map.remove(vid);
                 }
+                // Update relay verification key map to match new epoch
+                self.validator_keys = validators.into_iter().collect();
                 self.update_peer_info();
             }
         }
