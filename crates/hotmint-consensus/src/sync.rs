@@ -195,8 +195,11 @@ pub fn replay_blocks(
             ));
         }
 
-        // Verify app_hash matches local application state
-        if block.app_hash != *last_app_hash {
+        // Verify app_hash matches local application state.
+        // Skip when the application does not track state roots (e.g. NoopApplication),
+        // so that fullnodes without an ABCI backend can sync from peers running real
+        // applications that produce non-zero app_hash values.
+        if app.tracks_app_hash() && block.app_hash != *last_app_hash {
             return Err(eg!(
                 "sync block app_hash mismatch at height {}: block {} != local {}",
                 block.height.as_u64(),
@@ -233,7 +236,13 @@ pub fn replay_blocks(
         app.on_commit(block, &ctx)
             .c(d!("on_commit failed during sync"))?;
 
-        *last_app_hash = response.app_hash;
+        *last_app_hash = if app.tracks_app_hash() {
+            response.app_hash
+        } else {
+            // App does not compute state roots: carry the chain's authoritative
+            // value forward so that the continuity check stays coherent.
+            block.app_hash
+        };
 
         // Handle epoch transitions
         if !response.validator_updates.is_empty() {

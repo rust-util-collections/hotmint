@@ -73,9 +73,25 @@ pub trait Application: Send + Sync {
     fn query(&self, _path: &str, _data: &[u8]) -> Result<Vec<u8>> {
         Ok(vec![])
     }
+
+    /// Whether this application produces and verifies `app_hash` state roots.
+    ///
+    /// Applications that do not maintain a deterministic state root (e.g. the
+    /// embedded [`NoopApplication`] used by fullnodes without an ABCI backend)
+    /// should return `false`.  Sync will then bypass the app_hash equality
+    /// check and accept the chain's authoritative value, allowing the node to
+    /// follow a chain produced by peers running a real application.
+    fn tracks_app_hash(&self) -> bool {
+        true
+    }
 }
 
-/// No-op application stub for testing.
+/// No-op application stub for testing and fullnode-without-ABCI mode.
 pub struct NoopApplication;
 
-impl Application for NoopApplication {}
+impl Application for NoopApplication {
+    /// NoopApplication does not maintain state, so app_hash tracking is skipped.
+    fn tracks_app_hash(&self) -> bool {
+        false
+    }
+}

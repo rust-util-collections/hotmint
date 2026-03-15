@@ -109,7 +109,14 @@ pub fn try_commit(
         app.on_commit(block, &ctx)
             .c(d!("application commit failed"))?;
 
-        last_app_hash = response.app_hash;
+        // When the application does not track state roots, carry the block's
+        // authoritative app_hash forward so the engine state stays coherent
+        // with the chain even when NoopApplication always returns GENESIS.
+        last_app_hash = if app.tracks_app_hash() {
+            response.app_hash
+        } else {
+            block.app_hash
+        };
 
         if !response.validator_updates.is_empty() {
             let new_vs = current_epoch

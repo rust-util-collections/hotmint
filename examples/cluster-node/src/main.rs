@@ -252,6 +252,7 @@ async fn run(home: &std::path::Path) -> Result<()> {
     // Block sync
     let mut engine_state_epoch = state.current_epoch.clone();
     let mut engine_state_height = state.last_committed_height;
+    let mut engine_state_app_hash = state.last_app_hash;
 
     if !config.p2p.persistent_peers.is_empty() {
         info!("waiting for peer connection before sync...");
@@ -298,7 +299,6 @@ async fn run(home: &std::path::Path) -> Result<()> {
             // Use the main store so synced blocks are available for view
             // estimation and serving sync requests to other nodes.
             let mut synced = false;
-            let mut engine_state_app_hash = hotmint_types::BlockHash::GENESIS;
             for (vid, peer_id) in &sync_peers {
                 let bridge_sink = sync_sink.clone();
                 let pid = *peer_id;
@@ -350,6 +350,7 @@ async fn run(home: &std::path::Path) -> Result<()> {
     state.last_committed_height = engine_state_height;
     state.current_epoch = engine_state_epoch;
     state.validator_set = state.current_epoch.validator_set.clone();
+    state.last_app_hash = engine_state_app_hash;
 
     // Advance current_view to match synced state using the actual block.view
     // (accurate even when the network experienced view timeouts where view >> height).
@@ -448,5 +449,8 @@ impl<A: Application> Application for StatusApp<A> {
     }
     fn query(&self, path: &str, data: &[u8]) -> ruc::Result<Vec<u8>> {
         self.inner.query(path, data)
+    }
+    fn tracks_app_hash(&self) -> bool {
+        self.inner.tracks_app_hash()
     }
 }

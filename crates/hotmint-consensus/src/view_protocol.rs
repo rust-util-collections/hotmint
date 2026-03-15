@@ -230,8 +230,10 @@ pub fn on_proposal(
         ));
     }
 
-    // Verify app_hash matches local state
-    if block.app_hash != state.last_app_hash {
+    // Verify app_hash matches local state.
+    // Skip when the application does not track state roots (e.g. fullnode
+    // running NoopApplication against a chain produced by a real ABCI app).
+    if app.tracks_app_hash() && block.app_hash != state.last_app_hash {
         return Err(eg!(
             "app_hash mismatch: block {} != local {}",
             block.app_hash,

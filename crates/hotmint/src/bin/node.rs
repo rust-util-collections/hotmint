@@ -337,8 +337,7 @@ async fn run_node(
     };
     let mut engine_state_epoch = state.current_epoch.clone();
     let mut engine_state_height = state.last_committed_height;
-
-    // 9. Wrap with status channel for RPC
+    let mut engine_state_app_hash = state.last_app_hash;
     let (status_tx, status_rx) = watch::channel(ConsensusStatus::new(
         0,
         state.last_committed_height.as_u64(),
@@ -489,7 +488,6 @@ async fn run_node(
             // - accurate view estimation after sync
             // - serving sync requests to other nodes
             let mut synced = false;
-            let mut engine_state_app_hash = hotmint_types::BlockHash::GENESIS;
             for (vid, peer_id) in &sync_peers {
                 let bridge_sink = sync_sink.clone();
                 let pid = *peer_id;
@@ -541,6 +539,7 @@ async fn run_node(
     state.last_committed_height = engine_state_height;
     state.current_epoch = engine_state_epoch;
     state.validator_set = state.current_epoch.validator_set.clone();
+    state.last_app_hash = engine_state_app_hash;
 
     // Advance current_view to match synced state so the engine joins the correct view.
     // Read the actual block.view from the last committed block (accurate even when
@@ -645,6 +644,10 @@ impl Application for AppWithStatus {
     fn query(&self, path: &str, data: &[u8]) -> Result<Vec<u8>> {
         self.inner.query(path, data)
     }
+
+    fn tracks_app_hash(&self) -> bool {
+        self.inner.tracks_app_hash()
+    }
 }
 
 /// Newtype wrapper to use `Arc<dyn Application>` as `Box<dyn Application>`.
@@ -671,5 +674,8 @@ impl Application for ArcApp {
     }
     fn query(&self, path: &str, data: &[u8]) -> Result<Vec<u8>> {
         self.0.query(path, data)
+    }
+    fn tracks_app_hash(&self) -> bool {
+        self.0.tracks_app_hash()
     }
 }
