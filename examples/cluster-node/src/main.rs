@@ -316,9 +316,10 @@ async fn run(home: &std::path::Path) -> Result<()> {
 
                 info!("starting block sync with V{}", vid.0);
                 let sync_app = NoopApplication;
-                let mut store_guard = store.write().unwrap();
+                let mut sync_store =
+                    hotmint::consensus::store::SharedStoreAdapter(store.clone());
                 match hotmint::consensus::sync::sync_to_tip(
-                    store_guard.as_mut(),
+                    &mut sync_store,
                     &sync_app,
                     &mut engine_state_epoch,
                     &mut engine_state_height,
@@ -329,13 +330,11 @@ async fn run(home: &std::path::Path) -> Result<()> {
                 .await
                 {
                     Ok(()) => {
-                        drop(store_guard);
                         bridge.abort();
                         synced = true;
                         break;
                     }
                     Err(e) => {
-                        drop(store_guard);
                         info!(%e, peer = vid.0, "sync from peer failed, trying next");
                         bridge.abort();
                     }

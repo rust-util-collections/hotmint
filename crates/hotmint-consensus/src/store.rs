@@ -37,6 +37,39 @@ pub trait BlockStore: Send + Sync {
     }
 }
 
+/// Adapter that implements `BlockStore` over a shared `Arc<RwLock<Box<dyn BlockStore>>>`,
+/// acquiring and releasing the lock for each individual operation. Use this when you
+/// need a `&mut dyn BlockStore` in an async context without holding the lock across
+/// await points.
+pub struct SharedStoreAdapter(pub Arc<RwLock<Box<dyn BlockStore>>>);
+
+impl BlockStore for SharedStoreAdapter {
+    fn put_block(&mut self, block: Block) {
+        self.0.write().unwrap().put_block(block);
+    }
+    fn get_block(&self, hash: &BlockHash) -> Option<Block> {
+        self.0.read().unwrap().get_block(hash)
+    }
+    fn get_block_by_height(&self, h: Height) -> Option<Block> {
+        self.0.read().unwrap().get_block_by_height(h)
+    }
+    fn get_blocks_in_range(&self, from: Height, to: Height) -> Vec<Block> {
+        self.0.read().unwrap().get_blocks_in_range(from, to)
+    }
+    fn tip_height(&self) -> Height {
+        self.0.read().unwrap().tip_height()
+    }
+    fn put_commit_qc(&mut self, height: Height, qc: QuorumCertificate) {
+        self.0.write().unwrap().put_commit_qc(height, qc);
+    }
+    fn get_commit_qc(&self, height: Height) -> Option<QuorumCertificate> {
+        self.0.read().unwrap().get_commit_qc(height)
+    }
+    fn flush(&self) {
+        self.0.read().unwrap().flush();
+    }
+}
+
 /// In-memory block store stub
 pub struct MemoryBlockStore {
     by_hash: HashMap<BlockHash, Block>,
