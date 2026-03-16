@@ -103,7 +103,7 @@ pub struct IncomingSyncRequest {
 pub struct NetworkServiceHandles {
     pub service: NetworkService,
     pub sink: Litep2pNetworkSink,
-    pub msg_rx: mpsc::Receiver<(ValidatorId, ConsensusMessage)>,
+    pub msg_rx: mpsc::Receiver<(Option<ValidatorId>, ConsensusMessage)>,
     pub sync_req_rx: mpsc::Receiver<IncomingSyncRequest>,
     pub sync_resp_rx: mpsc::Receiver<SyncResponse>,
     pub peer_info_rx: watch::Receiver<Vec<PeerStatus>>,
@@ -128,7 +128,7 @@ pub struct NetworkService {
     /// Public keys of known validators, used to verify individual message signatures
     /// before relaying.  Updated on epoch transitions via [`NetCommand::EpochChange`].
     validator_keys: std::collections::HashMap<ValidatorId, hotmint_types::crypto::PublicKey>,
-    msg_tx: mpsc::Sender<(ValidatorId, ConsensusMessage)>,
+    msg_tx: mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>,
     cmd_rx: mpsc::Receiver<NetCommand>,
     sync_req_tx: mpsc::Sender<IncomingSyncRequest>,
     sync_resp_tx: mpsc::Sender<SyncResponse>,
@@ -348,13 +348,12 @@ impl NetworkService {
                 debug!(peer = %peer, "notification stream closed");
             }
             NotificationEvent::NotificationReceived { peer, notification } => {
-                // Determine the sender ValidatorId (if from a known validator)
-                let sender = self
+                // Determine the sender ValidatorId (None if peer is not a known validator)
+                let sender: Option<ValidatorId> = self
                     .peer_map
                     .peer_to_validator
                     .get(&peer)
-                    .copied()
-                    .unwrap_or(ValidatorId(u64::MAX));
+                    .copied();
 
                 match codec::decode::<ConsensusMessage>(&notification) {
                     Ok(msg) => {
@@ -367,9 +366,9 @@ impl NetworkService {
                         // is valid, preventing unknown peers from using this node as a DoS
                         // amplifier.
                         if self.relay_consensus
-                            && sender.0 != u64::MAX
+                            && let Some(sid) = sender
                             && hotmint_consensus::engine::verify_relay_sender(
-                                sender,
+                                sid,
                                 &msg,
                                 &self.validator_keys,
                             )
@@ -428,7 +427,7 @@ impl NetworkService {
                 };
                 match codec::decode::<ConsensusMessage>(&request) {
                     Ok(msg) => {
-                        if let Err(e) = self.msg_tx.try_send((sender, msg)) {
+                        if let Err(e) = self.msg_tx.try_send((Some(sender), msg)) {
                             warn!("consensus message dropped (reqresp): {e}");
                         }
                         self.reqresp_handle.send_response(request_id, vec![]);

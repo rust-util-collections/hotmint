@@ -42,7 +42,7 @@ pub struct ConsensusEngine {
     vote_collector: VoteCollector,
     pacemaker: Pacemaker,
     pacemaker_config: PacemakerConfig,
-    msg_rx: mpsc::Receiver<(ValidatorId, ConsensusMessage)>,
+    msg_rx: mpsc::Receiver<(Option<ValidatorId>, ConsensusMessage)>,
     /// Collected unique status cert senders (for leader, per view)
     status_senders: HashSet<ValidatorId>,
     /// The QC formed in this view's first voting round (used to build DoubleCert)
@@ -105,7 +105,7 @@ pub struct ConsensusEngineBuilder {
     network: Option<Box<dyn NetworkSink>>,
     app: Option<Box<dyn Application>>,
     signer: Option<Box<dyn Signer>>,
-    msg_rx: Option<mpsc::Receiver<(ValidatorId, ConsensusMessage)>>,
+    msg_rx: Option<mpsc::Receiver<(Option<ValidatorId>, ConsensusMessage)>>,
     verifier: Option<Box<dyn Verifier>>,
     pacemaker: Option<PacemakerConfig>,
     persistence: Option<Box<dyn StatePersistence>>,
@@ -151,7 +151,7 @@ impl ConsensusEngineBuilder {
         self
     }
 
-    pub fn messages(mut self, msg_rx: mpsc::Receiver<(ValidatorId, ConsensusMessage)>) -> Self {
+    pub fn messages(mut self, msg_rx: mpsc::Receiver<(Option<ValidatorId>, ConsensusMessage)>) -> Self {
         self.msg_rx = Some(msg_rx);
         self
     }
@@ -211,7 +211,7 @@ impl ConsensusEngine {
         network: Box<dyn NetworkSink>,
         app: Box<dyn Application>,
         signer: Box<dyn Signer>,
-        msg_rx: mpsc::Receiver<(ValidatorId, ConsensusMessage)>,
+        msg_rx: mpsc::Receiver<(Option<ValidatorId>, ConsensusMessage)>,
         config: EngineConfig,
     ) -> Self {
         let pc = config.pacemaker.unwrap_or_default();
@@ -557,7 +557,7 @@ impl ConsensusEngine {
         }
     }
 
-    fn handle_message(&mut self, _sender: ValidatorId, msg: ConsensusMessage) -> Result<()> {
+    fn handle_message(&mut self, _sender: Option<ValidatorId>, msg: ConsensusMessage) -> Result<()> {
         if !self.verify_message(&msg) {
             return Ok(());
         }

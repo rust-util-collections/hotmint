@@ -13,7 +13,7 @@ pub struct ChannelNetwork {
     pub self_id: ValidatorId,
     pub senders: Vec<(
         ValidatorId,
-        tokio::sync::mpsc::Sender<(ValidatorId, ConsensusMessage)>,
+        tokio::sync::mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>,
     )>,
 }
 
@@ -22,7 +22,7 @@ impl ChannelNetwork {
         self_id: ValidatorId,
         senders: Vec<(
             ValidatorId,
-            tokio::sync::mpsc::Sender<(ValidatorId, ConsensusMessage)>,
+            tokio::sync::mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>,
         )>,
     ) -> Self {
         Self { self_id, senders }
@@ -37,17 +37,17 @@ impl ChannelNetwork {
         n: u64,
     ) -> Vec<(
         ChannelNetwork,
-        tokio::sync::mpsc::Receiver<(ValidatorId, ConsensusMessage)>,
+        tokio::sync::mpsc::Receiver<(Option<ValidatorId>, ConsensusMessage)>,
     )> {
         use std::collections::HashMap;
 
         let mut senders: HashMap<
             ValidatorId,
-            tokio::sync::mpsc::Sender<(ValidatorId, ConsensusMessage)>,
+            tokio::sync::mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>,
         > = HashMap::new();
         let mut receivers: HashMap<
             ValidatorId,
-            tokio::sync::mpsc::Receiver<(ValidatorId, ConsensusMessage)>,
+            tokio::sync::mpsc::Receiver<(Option<ValidatorId>, ConsensusMessage)>,
         > = HashMap::new();
 
         for i in 0..n {
@@ -58,7 +58,7 @@ impl ChannelNetwork {
 
         let all_senders: Vec<(
             ValidatorId,
-            tokio::sync::mpsc::Sender<(ValidatorId, ConsensusMessage)>,
+            tokio::sync::mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>,
         )> = senders.iter().map(|(&id, tx)| (id, tx.clone())).collect();
 
         (0..n)
@@ -76,7 +76,7 @@ impl NetworkSink for ChannelNetwork {
     fn broadcast(&self, msg: ConsensusMessage) {
         for (id, sender) in &self.senders {
             if *id != self.self_id {
-                let _ = sender.try_send((self.self_id, msg.clone()));
+                let _ = sender.try_send((Some(self.self_id), msg.clone()));
             }
         }
     }
@@ -84,7 +84,7 @@ impl NetworkSink for ChannelNetwork {
     fn send_to(&self, target: ValidatorId, msg: ConsensusMessage) {
         for (id, sender) in &self.senders {
             if *id == target {
-                let _ = sender.try_send((self.self_id, msg));
+                let _ = sender.try_send((Some(self.self_id), msg));
                 return;
             }
         }

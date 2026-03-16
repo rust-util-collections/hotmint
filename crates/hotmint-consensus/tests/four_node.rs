@@ -47,7 +47,7 @@ fn spawn_network(n: u64) -> (Vec<Arc<AtomicU64>>, Vec<tokio::task::JoinHandle<()
     let validator_set = ValidatorSet::new(validator_infos);
 
     let mut receivers = HashMap::new();
-    let mut all_senders: HashMap<ValidatorId, mpsc::Sender<(ValidatorId, ConsensusMessage)>> =
+    let mut all_senders: HashMap<ValidatorId, mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>> =
         HashMap::new();
 
     for i in 0..n {
@@ -62,7 +62,7 @@ fn spawn_network(n: u64) -> (Vec<Arc<AtomicU64>>, Vec<tokio::task::JoinHandle<()
     for i in 0..n {
         let vid = ValidatorId(i);
         let rx = receivers.remove(&vid).unwrap();
-        let senders: Vec<(ValidatorId, mpsc::Sender<(ValidatorId, ConsensusMessage)>)> =
+        let senders: Vec<(ValidatorId, mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>)> =
             all_senders
                 .iter()
                 .map(|(&id, tx)| (id, tx.clone()))

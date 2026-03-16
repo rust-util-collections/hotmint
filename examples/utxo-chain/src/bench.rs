@@ -139,7 +139,7 @@ async fn run_bench(label: &str, base_timeout_ms: u64) {
     let validator_set = ValidatorSet::new(validator_infos);
 
     let mut receivers = HashMap::new();
-    let mut all_senders: HashMap<ValidatorId, mpsc::Sender<(ValidatorId, ConsensusMessage)>> =
+    let mut all_senders: HashMap<ValidatorId, mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>> =
         HashMap::new();
 
     for i in 0..NUM_VALIDATORS {
