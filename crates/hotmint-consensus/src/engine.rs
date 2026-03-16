@@ -695,6 +695,23 @@ impl ConsensusEngine {
                     return Ok(());
                 }
                 if certificate.view == self.state.current_view {
+                    // Validate the Prepare's block app_hash if we have the block in
+                    // store. Prevents locking onto a block whose app_hash diverges from
+                    // our local state. When the block is absent (node caught up via TC),
+                    // we defer to the QC's 2f+1 signatures for safety.
+                    if self.app.tracks_app_hash() {
+                        let store = self.store.read().unwrap();
+                        if let Some(block) = store.get_block(&certificate.block_hash) {
+                            if block.app_hash != self.state.last_app_hash {
+                                warn!(
+                                    block_app_hash = %block.app_hash,
+                                    local_app_hash = %self.state.last_app_hash,
+                                    "prepare block app_hash mismatch, ignoring"
+                                );
+                                return Ok(());
+                            }
+                        }
+                    }
                     view_protocol::on_prepare(
                         &mut self.state,
                         certificate,
