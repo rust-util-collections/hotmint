@@ -108,6 +108,10 @@ pub struct NetworkServiceHandles {
     pub sync_resp_rx: mpsc::Receiver<SyncResponse>,
     pub peer_info_rx: watch::Receiver<Vec<PeerStatus>>,
     pub connected_count_rx: watch::Receiver<usize>,
+    /// Number of peers with an open notification (consensus) substream.
+    /// Reaches >0 once the notification handshake completes, which is
+    /// later than the raw connection and avoids the need for a fixed sleep.
+    pub notif_connected_count_rx: watch::Receiver<usize>,
 }
 
 /// NetworkService wraps litep2p and provides consensus-level networking
@@ -134,6 +138,9 @@ pub struct NetworkService {
     sync_resp_tx: mpsc::Sender<SyncResponse>,
     peer_info_tx: watch::Sender<Vec<PeerStatus>>,
     connected_count_tx: watch::Sender<usize>,
+    /// Tracks peers with an open notification substream (post-handshake).
+    notif_connected_peers: std::collections::HashSet<PeerId>,
+    notif_connected_count_tx: watch::Sender<usize>,
     connected_peers: std::collections::HashSet<PeerId>,
     /// Two-set rotation for relay deduplication: when the active set fills up,
     /// swap it to the backup position (clearing the old backup). Messages are
@@ -235,6 +242,7 @@ impl NetworkService {
         };
 
         let (connected_count_tx, connected_count_rx) = watch::channel(0usize);
+        let (notif_connected_count_tx, notif_connected_count_rx) = watch::channel(0usize);
 
         // Save persistent peers for auto-reconnect
         let persistent_peers: HashMap<ValidatorId, PeerId> = peer_map.validator_to_peer.clone();
@@ -262,6 +270,8 @@ impl NetworkService {
                 sync_resp_tx,
                 peer_info_tx,
                 connected_count_tx,
+                notif_connected_peers: std::collections::HashSet::new(),
+                notif_connected_count_tx,
                 connected_peers: std::collections::HashSet::new(),
                 seen_active: std::collections::HashSet::new(),
                 seen_backup: std::collections::HashSet::new(),
@@ -272,6 +282,7 @@ impl NetworkService {
             sync_resp_rx,
             peer_info_rx,
             connected_count_rx,
+            notif_connected_count_rx,
         })
     }
 
@@ -343,9 +354,17 @@ impl NetworkService {
             }
             NotificationEvent::NotificationStreamOpened { peer, .. } => {
                 info!(peer = %peer, "notification stream opened");
+                self.notif_connected_peers.insert(peer);
+                let _ = self
+                    .notif_connected_count_tx
+                    .send(self.notif_connected_peers.len());
             }
             NotificationEvent::NotificationStreamClosed { peer } => {
                 debug!(peer = %peer, "notification stream closed");
+                self.notif_connected_peers.remove(&peer);
+                let _ = self
+                    .notif_connected_count_tx
+                    .send(self.notif_connected_peers.len());
             }
             NotificationEvent::NotificationReceived { peer, notification } => {
                 // Determine the sender ValidatorId (None if peer is not a known validator)

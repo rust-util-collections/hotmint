@@ -293,7 +293,8 @@ async fn run_node(
         sync_req_rx,
         mut sync_resp_rx,
         peer_info_rx,
-        connected_count_rx,
+        connected_count_rx: _,
+        notif_connected_count_rx: mut notif_count_rx,
     } = {
         let peer_book_path = home.join("data").join("peer_book.json");
         let peer_book = hotmint::network::peer::PeerBook::load(&peer_book_path)
@@ -449,11 +450,9 @@ async fn run_node(
 
         info!("waiting for peer connection before sync...");
         let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(15);
-        let mut count_rx = connected_count_rx;
         loop {
-            if *count_rx.borrow() > 0 {
-                // Wait for subprotocol handshakes to complete after transport connects
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            if *notif_count_rx.borrow() > 0 {
+                // At least one notification substream is open — ready to sync.
                 break;
             }
             if tokio::time::Instant::now() >= deadline {
@@ -461,11 +460,11 @@ async fn run_node(
                 break;
             }
             let _ =
-                tokio::time::timeout(tokio::time::Duration::from_millis(500), count_rx.changed())
+                tokio::time::timeout(tokio::time::Duration::from_millis(500), notif_count_rx.changed())
                     .await;
         }
 
-        if *count_rx.borrow() > 0 {
+        if *notif_count_rx.borrow() > 0 {
             // Collect all peers' PeerIds from persistent_peers config
             let sync_peers: Vec<(ValidatorId, litep2p::PeerId)> = config
                 .p2p
