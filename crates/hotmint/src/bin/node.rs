@@ -272,6 +272,9 @@ async fn run_node(
         state.validator_set = epoch.validator_set.clone();
         state.current_epoch = epoch;
     }
+    if let Some(hash) = pcs.load_last_app_hash() {
+        state.last_app_hash = hash;
+    }
 
     // 7. Parse peers and create network
     let (peer_map, known_addresses) = if config.p2p.persistent_peers.is_empty() {

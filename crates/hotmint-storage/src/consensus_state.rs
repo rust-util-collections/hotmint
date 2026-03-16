@@ -1,4 +1,4 @@
-use hotmint_types::{Epoch, Height, QuorumCertificate, ViewNumber};
+use hotmint_types::{BlockHash, Epoch, Height, QuorumCertificate, ViewNumber};
 use serde::{Deserialize, Serialize};
 use vsdb::MapxOrd;
 
@@ -8,6 +8,7 @@ const KEY_LOCKED_QC: u64 = 2;
 const KEY_HIGHEST_QC: u64 = 3;
 const KEY_LAST_COMMITTED_HEIGHT: u64 = 4;
 const KEY_CURRENT_EPOCH: u64 = 5;
+const KEY_LAST_APP_HASH: u64 = 6;
 
 /// Persisted consensus state fields (serialized as a single blob per key)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,6 +17,7 @@ enum StateValue {
     Height(Height),
     Qc(QuorumCertificate),
     Epoch(Epoch),
+    AppHash(BlockHash),
 }
 
 /// Persistent consensus state store backed by vsdb
@@ -92,6 +94,18 @@ impl PersistentConsensusState {
         })
     }
 
+    pub fn save_last_app_hash(&mut self, hash: BlockHash) {
+        self.store
+            .insert(&KEY_LAST_APP_HASH, &StateValue::AppHash(hash));
+    }
+
+    pub fn load_last_app_hash(&self) -> Option<BlockHash> {
+        self.store.get(&KEY_LAST_APP_HASH).and_then(|v| match v {
+            StateValue::AppHash(h) => Some(h),
+            _ => None,
+        })
+    }
+
     pub fn flush(&self) {
         vsdb::vsdb_flush();
     }
@@ -112,6 +126,9 @@ impl hotmint_consensus::engine::StatePersistence for PersistentConsensusState {
     }
     fn save_current_epoch(&mut self, epoch: &Epoch) {
         self.save_current_epoch(epoch);
+    }
+    fn save_last_app_hash(&mut self, hash: BlockHash) {
+        self.save_last_app_hash(hash);
     }
     fn flush(&self) {
         self.flush();

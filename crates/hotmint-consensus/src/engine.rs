@@ -29,6 +29,7 @@ pub trait StatePersistence: Send {
     fn save_highest_qc(&mut self, qc: &QuorumCertificate);
     fn save_last_committed_height(&mut self, height: Height);
     fn save_current_epoch(&mut self, epoch: &Epoch);
+    fn save_last_app_hash(&mut self, hash: BlockHash);
     fn flush(&self);
 }
 
@@ -1011,6 +1012,7 @@ impl ConsensusEngine {
             }
             p.save_last_committed_height(self.state.last_committed_height);
             p.save_current_epoch(&self.state.current_epoch);
+            p.save_last_app_hash(self.state.last_app_hash);
             p.flush();
         }
     }
