@@ -10,6 +10,8 @@
 //! This is part of the hotmint wire protocol — all node implementations
 //! (regardless of P2P library) must support this format.
 
+use std::io::Read;
+
 use serde::{Deserialize, Serialize};
 
 /// Payloads larger than this threshold are zstd-compressed.
@@ -17,6 +19,10 @@ const COMPRESS_THRESHOLD: usize = 256;
 
 /// Zstd compression level (3 = good balance of speed and ratio).
 const ZSTD_LEVEL: i32 = 3;
+
+/// Maximum allowed decompressed payload size (matches MAX_NOTIFICATION_SIZE in service.rs).
+/// Prevents decompression-bomb attacks on compressed frames.
+const MAX_DECOMPRESSED_SIZE: usize = 16 * 1024 * 1024;
 
 const TAG_RAW: u8 = 0x00;
 const TAG_ZSTD: u8 = 0x01;
@@ -47,8 +53,16 @@ pub fn decode<T: for<'de> Deserialize<'de>>(data: &[u8]) -> Result<T, DecodeErro
     match data[0] {
         TAG_RAW => serde_cbor_2::from_slice(&data[1..]).map_err(DecodeError::Cbor),
         TAG_ZSTD => {
-            let decompressed =
-                zstd::decode_all(&data[1..]).map_err(|e| DecodeError::Zstd(e.to_string()))?;
+            let decoder = zstd::stream::read::Decoder::new(&data[1..])
+                .map_err(|e| DecodeError::Zstd(e.to_string()))?;
+            let mut decompressed = Vec::with_capacity(data.len().min(MAX_DECOMPRESSED_SIZE));
+            decoder
+                .take(MAX_DECOMPRESSED_SIZE as u64 + 1)
+                .read_to_end(&mut decompressed)
+                .map_err(|e| DecodeError::Zstd(e.to_string()))?;
+            if decompressed.len() > MAX_DECOMPRESSED_SIZE {
+                return Err(DecodeError::DecompressedTooLarge);
+            }
             serde_cbor_2::from_slice(&decompressed).map_err(DecodeError::Cbor)
         }
         tag => Err(DecodeError::UnknownTag(tag)),
@@ -61,6 +75,7 @@ pub enum DecodeError {
     UnknownTag(u8),
     Cbor(serde_cbor_2::Error),
     Zstd(String),
+    DecompressedTooLarge,
 }
 
 impl std::fmt::Display for DecodeError {
@@ -70,6 +85,11 @@ impl std::fmt::Display for DecodeError {
             Self::UnknownTag(tag) => write!(f, "unknown codec tag: 0x{tag:02x}"),
             Self::Cbor(e) => write!(f, "cbor: {e}"),
             Self::Zstd(e) => write!(f, "zstd: {e}"),
+            Self::DecompressedTooLarge => write!(
+                f,
+                "decompressed payload exceeds {} bytes",
+                MAX_DECOMPRESSED_SIZE
+            ),
         }
     }
 }
