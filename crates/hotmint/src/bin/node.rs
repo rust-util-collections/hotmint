@@ -9,11 +9,12 @@ use tracing::{Level, info};
 use hotmint::abci::client::IpcApplicationClient;
 use hotmint::api::rpc::ConsensusStatus;
 use hotmint::config::{self, GenesisDoc, NodeConfig, NodeKey, PrivValidatorKey};
-use hotmint::consensus::application::Application;
+use hotmint::consensus::application::{Application, NoopApplication};
 use hotmint::consensus::engine::{ConsensusEngine, EngineConfig};
 use hotmint::consensus::pacemaker::PacemakerConfig;
 use hotmint::consensus::state::ConsensusState;
-use hotmint::consensus::store::BlockStore;
+use hotmint::consensus::store::{BlockStore, SharedStoreAdapter};
+use hotmint::consensus::sync::sync_to_tip;
 use hotmint::crypto::{Ed25519Signer, Ed25519Verifier};
 use hotmint::mempool::Mempool;
 use hotmint::network::service::{NetworkService, PeerMap};
@@ -367,11 +368,14 @@ async fn run_node(
         })
         .collect();
     let (vs_tx, vs_rx) = watch::channel(initial_vs);
+    let (epoch_tx, epoch_rx) =
+        watch::channel(state.current_epoch.clone());
 
     let app: Arc<dyn Application> = Arc::new(AppWithStatus {
         inner: app_box,
         status_tx,
         vs_tx,
+        epoch_tx,
     });
 
     // 10. Create mempool
@@ -448,7 +452,29 @@ async fn run_node(
     }
 
     // 14. Sync catch-up before starting consensus (if peers configured)
-    if !config.p2p.persistent_peers.is_empty() {
+    // Parse sync peers once — used for both initial sync and the reconnect watcher.
+    let sync_peers: Vec<(ValidatorId, litep2p::PeerId)> = config
+        .p2p
+        .persistent_peers
+        .iter()
+        .filter_map(|p| {
+            let (id_str, _) = p.split_once('@')?;
+            let vid = ValidatorId(id_str.parse::<u64>().ok()?);
+            let peer_id = genesis
+                .validators
+                .iter()
+                .find(|v| v.id == vid.0)
+                .and_then(|gv| {
+                    let pk = hex::decode(&gv.public_key).ok()?;
+                    let lpk =
+                        litep2p::crypto::ed25519::PublicKey::try_from_bytes(&pk).ok()?;
+                    Some(lpk.to_peer_id())
+                })?;
+            Some((vid, peer_id))
+        })
+        .collect();
+
+    if !sync_peers.is_empty() {
         use hotmint_types::sync::SyncRequest;
 
         info!("waiting for peer connection before sync...");
@@ -468,28 +494,6 @@ async fn run_node(
         }
 
         if *notif_count_rx.borrow() > 0 {
-            // Collect all peers' PeerIds from persistent_peers config
-            let sync_peers: Vec<(ValidatorId, litep2p::PeerId)> = config
-                .p2p
-                .persistent_peers
-                .iter()
-                .filter_map(|p| {
-                    let (id_str, _) = p.split_once('@')?;
-                    let vid = ValidatorId(id_str.parse::<u64>().ok()?);
-                    let peer_id = genesis
-                        .validators
-                        .iter()
-                        .find(|v| v.id == vid.0)
-                        .and_then(|gv| {
-                            let pk = hex::decode(&gv.public_key).ok()?;
-                            let lpk =
-                                litep2p::crypto::ed25519::PublicKey::try_from_bytes(&pk).ok()?;
-                            Some(lpk.to_peer_id())
-                        })?;
-                    Some((vid, peer_id))
-                })
-                .collect();
-
             // Try syncing from each peer in order until one succeeds.
             // Use the main store so synced blocks are available for:
             // - accurate view estimation after sync
@@ -511,9 +515,8 @@ async fn run_node(
                 while sync_resp_rx.try_recv().is_ok() {}
 
                 info!("starting block sync with V{}", vid.0);
-                let mut sync_store =
-                    hotmint::consensus::store::SharedStoreAdapter(store.clone());
-                match hotmint::consensus::sync::sync_to_tip(
+                let mut sync_store = SharedStoreAdapter(store.clone());
+                match sync_to_tip(
                     &mut sync_store,
                     sync_app_box.as_ref(),
                     &mut engine_state_epoch,
@@ -539,6 +542,81 @@ async fn run_node(
                 info!("all sync peers failed, continuing from current state");
             }
         }
+    }
+
+    // Spawn reconnect re-sync watcher: after the engine is running, detect when
+    // the node reconnects to peers (notif_count goes 0→>0) and re-sync the store.
+    // Uses NoopApplication to avoid double-executing blocks via ABCI — the running
+    // engine will fast-forward through the newly stored blocks on the next DC received.
+    if !sync_peers.is_empty() {
+        let mut watcher_notif_rx = notif_count_rx;
+        let watcher_store = store.clone();
+        let watcher_sink = sync_sink.clone();
+        let watcher_peers = sync_peers.clone();
+        let mut watcher_resp_rx = sync_resp_rx;
+        let watcher_epoch_rx = epoch_rx;
+
+        tokio::spawn(async move {
+            use hotmint_types::sync::SyncRequest;
+            use tracing::warn;
+
+            let mut prev_count = *watcher_notif_rx.borrow();
+            loop {
+                if watcher_notif_rx.changed().await.is_err() {
+                    break;
+                }
+                let count = *watcher_notif_rx.borrow();
+                if prev_count == 0 && count > 0 {
+                    info!("reconnected to peers, triggering block re-sync");
+                    let current_epoch = watcher_epoch_rx.borrow().clone();
+                    let current_height = {
+                        let s = watcher_store.read().unwrap_or_else(|e| e.into_inner());
+                        s.tip_height()
+                    };
+                    let mut h = current_height;
+                    let mut epoch = current_epoch;
+                    // NoopApplication: app_hash is carried from blocks, initial value irrelevant
+                    let mut app_hash = BlockHash::GENESIS;
+
+                    for (vid, peer_id) in &watcher_peers {
+                        let pid = *peer_id;
+                        let bridge_sink = watcher_sink.clone();
+                        let (sync_tx, mut sync_bridge_rx) =
+                            tokio::sync::mpsc::channel::<SyncRequest>(16);
+                        let bridge = tokio::spawn(async move {
+                            while let Some(req) = sync_bridge_rx.recv().await {
+                                bridge_sink.send_sync_request(pid, &req);
+                            }
+                        });
+                        // Drain stale responses before starting new sync
+                        while watcher_resp_rx.try_recv().is_ok() {}
+                        let mut store_adapter = SharedStoreAdapter(watcher_store.clone());
+                        let noop = NoopApplication;
+                        match sync_to_tip(
+                            &mut store_adapter,
+                            &noop,
+                            &mut epoch,
+                            &mut h,
+                            &mut app_hash,
+                            &sync_tx,
+                            &mut watcher_resp_rx,
+                        )
+                        .await
+                        {
+                            Ok(()) => {
+                                bridge.abort();
+                                break;
+                            }
+                            Err(e) => {
+                                warn!(peer = vid.0, error = %e, "reconnect re-sync failed, trying next");
+                                bridge.abort();
+                            }
+                        }
+                    }
+                }
+                prev_count = count;
+            }
+        });
     }
 
     // 15. Write back synced state and create consensus engine
@@ -601,6 +679,7 @@ struct AppWithStatus {
     inner: Box<dyn Application>,
     status_tx: watch::Sender<ConsensusStatus>,
     vs_tx: watch::Sender<Vec<hotmint::api::types::ValidatorInfoResponse>>,
+    epoch_tx: watch::Sender<hotmint_types::epoch::Epoch>,
 }
 
 impl Application for AppWithStatus {
@@ -641,6 +720,12 @@ impl Application for AppWithStatus {
             })
             .collect();
         let _ = self.vs_tx.send(vs);
+        // Keep epoch watch current for reconnect re-sync watcher
+        let _ = self.epoch_tx.send(hotmint_types::epoch::Epoch::new(
+            ctx.epoch,
+            ctx.epoch_start_view,
+            ctx.validator_set.clone(),
+        ));
         Ok(())
     }
 
