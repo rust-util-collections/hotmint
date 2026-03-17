@@ -57,7 +57,7 @@ let removed_peer: Option<PeerId> = peer_map.remove(ValidatorId(2));
 ### Creating the Service
 
 ```rust
-use hotmint::network::service::NetworkService;
+use hotmint::network::service::{NetworkService, NetworkServiceHandles};
 
 let listen_addr = "/ip4/0.0.0.0/tcp/20000".parse().unwrap();
 
@@ -68,27 +68,51 @@ let known_addresses = vec![
     (peer_id_3, vec!["/ip4/10.0.0.4/tcp/20000".parse().unwrap()]),
 ];
 
-let (net_service, network_sink, msg_rx, sync_req_rx, sync_resp_rx, peer_info_rx, connected_count_rx) =
-    NetworkService::create(
-        listen_addr,
-        peer_map,
-        known_addresses,
-        None, // Optional<litep2p::crypto::ed25519::Keypair>
-        peer_book,      // PeerBook (persistent peer address store)
-        pex_config,     // PexConfig (peer exchange settings)
-    ).unwrap();
+// validator_keys: list of (ValidatorId, PublicKey) for relay signature verification
+let validator_keys = genesis.validators.iter()
+    .map(|v| (v.id, v.public_key.clone()))
+    .collect();
+
+let NetworkServiceHandles {
+    service: net_service,
+    sink: network_sink,
+    msg_rx,
+    sync_req_rx,
+    sync_resp_rx,
+    peer_info_rx,
+    connected_count_rx,
+    notif_connected_count_rx,
+} = NetworkService::create(
+    listen_addr,
+    peer_map,
+    known_addresses,
+    None,           // Option<litep2p::crypto::ed25519::Keypair> — None generates a random keypair
+    peer_book,      // PeerBook (persistent peer address store)
+    pex_config,     // PexConfig (peer exchange settings)
+    false,          // relay_consensus: relay consensus messages to other peers
+    validator_keys, // initial validator public keys for relay sender verification
+).unwrap();
 ```
 
-`NetworkService::create` takes six parameters: the listen address, peer map, known addresses, an optional `keypair` (`Option<litep2p::crypto::ed25519::Keypair>`, `None` generates a random keypair), a `PeerBook` (persistent peer address store), and a `PexConfig` (peer exchange settings).
+`NetworkService::create` takes eight parameters:
+1. `listen_addr` — P2P listen address (multiaddr)
+2. `peer_map` — mapping of `ValidatorId` ↔ `PeerId`
+3. `known_addresses` — bootstrap peer addresses
+4. `keypair` — `Option<litep2p::crypto::ed25519::Keypair>` (`None` generates a random keypair)
+5. `peer_book` — persistent peer address store (`Arc<RwLock<PeerBook>>`)
+6. `pex_config` — peer exchange settings
+7. `relay_consensus: bool` — whether to relay consensus messages to other validators
+8. `initial_validators` — initial set of `(ValidatorId, PublicKey)` for relay sender signature verification
 
-It returns seven items:
-1. `net_service: NetworkService` — the service itself, must be `.run()` on a tokio task
-2. `network_sink: Litep2pNetworkSink` — implements `NetworkSink`, pass to `ConsensusEngine`
-3. `msg_rx: Receiver<(ValidatorId, ConsensusMessage)>` — incoming consensus messages, pass to `ConsensusEngine`
+It returns a `NetworkServiceHandles` struct with:
+1. `service: NetworkService` — the service itself, must be `.run()` on a tokio task
+2. `sink` — implements `NetworkSink`, pass to `ConsensusEngine`
+3. `msg_rx: Receiver<(Option<ValidatorId>, ConsensusMessage)>` — incoming consensus messages; sender is `None` for unknown peers
 4. `sync_req_rx: Receiver<IncomingSyncRequest>` — incoming sync requests from peers
 5. `sync_resp_rx: Receiver<SyncResponse>` — incoming sync responses from peers
 6. `peer_info_rx: watch::Receiver<Vec<PeerStatus>>` — live peer connection status updates
-7. `connected_count_rx: watch::Receiver<usize>` — number of currently connected peers
+7. `connected_count_rx: watch::Receiver<usize>` — number of TCP-connected peers
+8. `notif_connected_count_rx: watch::Receiver<usize>` — number of peers with an open notification substream (ready for consensus)
 
 ### Running
 

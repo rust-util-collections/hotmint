@@ -83,11 +83,11 @@ Each trait includes an in-memory/no-op stub implementation for development use. 
 
 IPC proxy layer (Application Binary Consensus Interface) for running applications as separate processes:
 
-- `IpcApplicationClient` — implements `Application` by forwarding calls over a Unix domain socket using length-prefixed CBOR frames
+- `IpcApplicationClient` — implements `Application` by forwarding calls over a Unix domain socket using length-prefixed protobuf frames
 - `IpcApplicationServer` + `ApplicationHandler` — listens on a Unix socket, dispatches requests to user-provided handler
 - `OwnedBlockContext` — owned version of `BlockContext` for cross-process serialization
 
-This enables applications written in any language to participate in consensus, communicating via a simple length-prefixed CBOR protocol over Unix stream sockets.
+This enables applications written in any language to participate in consensus, communicating via a simple length-prefixed protobuf protocol over Unix stream sockets.
 
 ### hotmint-storage
 

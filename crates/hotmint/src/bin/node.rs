@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 
 use clap::{Parser, Subcommand};
 use tokio::sync::watch;
-use tracing::{Level, info};
+use tracing::{Level, error, info};
 
 use hotmint::abci::client::IpcApplicationClient;
 use hotmint::api::rpc::ConsensusStatus;
@@ -324,8 +324,11 @@ async fn run_node(
         )?
     };
 
-    // 8. Create application (ABCI client or embedded noop for fullnode)
-    let use_abci = !is_fullnode || !config.proxy_app.is_empty();
+    // 8. Create application (ABCI client or embedded noop)
+    // Use ABCI only when proxy_app is explicitly configured; otherwise fall back to
+    // the embedded no-op application. This allows both validators and fullnodes to run
+    // without an ABCI backend when no proxy_app is set (useful for testing / fullnodes).
+    let use_abci = !config.proxy_app.is_empty();
     let (app_box, sync_app_box): (Box<dyn Application>, Box<dyn Application>) = if use_abci {
         let proxy_path = config
             .proxy_app
@@ -402,9 +405,10 @@ async fn run_node(
 
     let sync_sink = network_sink.clone();
 
-    // 12. Spawn network + RPC before sync (sync needs the network running)
-    tokio::spawn(async move { network_service.run().await });
-    tokio::spawn(async move { rpc_server.run().await });
+    // 12. Spawn network + RPC before sync (sync needs the network running).
+    // Capture JoinHandles to detect unexpected exits and abort the process.
+    let network_handle = tokio::spawn(async move { network_service.run().await });
+    let rpc_handle = tokio::spawn(async move { rpc_server.run().await });
 
     // Sync responder: answer incoming sync requests from peers
     {
@@ -667,8 +671,26 @@ async fn run_node(
 
     info!("consensus engine starting");
 
-    // 16. Run consensus engine (blocks forever)
-    engine.run().await;
+    // 16. Run consensus engine (blocks forever).
+    // Supervise the network and RPC tasks: if either exits unexpectedly, log the
+    // reason and abort the process so the OS process manager can restart the node.
+    tokio::select! {
+        () = engine.run() => {},
+        res = network_handle => {
+            match res {
+                Ok(()) => error!("network service exited unexpectedly"),
+                Err(e) => error!("network service panicked: {e}"),
+            }
+            std::process::exit(1);
+        }
+        res = rpc_handle => {
+            match res {
+                Ok(()) => error!("RPC server exited unexpectedly"),
+                Err(e) => error!("RPC server panicked: {e}"),
+            }
+            std::process::exit(1);
+        }
+    }
 
     Ok(())
 }

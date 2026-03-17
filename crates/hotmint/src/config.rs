@@ -88,7 +88,7 @@ pub struct MempoolConfig {
 impl Default for NodeConfig {
     fn default() -> Self {
         Self {
-            proxy_app: "unix:///tmp/hotmint/app.sock".into(),
+            proxy_app: String::new(),
             node: NodeModeConfig::default(),
             rpc: RpcConfig {
                 laddr: "127.0.0.1:20001".into(),

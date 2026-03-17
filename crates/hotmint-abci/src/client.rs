@@ -85,11 +85,11 @@ impl Application for IpcApplicationClient {
         match self.call(&req) {
             Ok(Response::CreatePayload(payload)) => payload,
             Ok(other) => {
-                tracing::error!(?other, "unexpected response for create_payload");
+                tracing::error!(?other, "IPC_FAULT: unexpected response for create_payload");
                 vec![]
             }
             Err(e) => {
-                tracing::error!(%e, "IPC create_payload failed");
+                tracing::error!(%e, "IPC_FAULT: create_payload call failed — proposing empty block");
                 vec![]
             }
         }
@@ -103,12 +103,10 @@ impl Application for IpcApplicationClient {
         match self.call(&req) {
             Ok(Response::ValidateBlock(ok)) => ok,
             Ok(other) => {
-                tracing::error!(?other, "unexpected response for validate_block");
-                false
+                panic!("IPC_FAULT: unexpected response for validate_block: {other:?}");
             }
             Err(e) => {
-                tracing::error!(%e, "IPC validate_block failed");
-                false
+                panic!("IPC_FAULT: validate_block call failed — cannot safely validate block without ABCI: {e}");
             }
         }
     }
@@ -121,11 +119,11 @@ impl Application for IpcApplicationClient {
         match self.call(&req) {
             Ok(Response::ValidateTx(ok)) => ok,
             Ok(other) => {
-                tracing::error!(?other, "unexpected response for validate_tx");
+                tracing::error!(?other, "IPC_FAULT: unexpected response for validate_tx");
                 false
             }
             Err(e) => {
-                tracing::error!(%e, "IPC validate_tx failed");
+                tracing::error!(%e, "IPC_FAULT: validate_tx call failed — rejecting tx");
                 false
             }
         }

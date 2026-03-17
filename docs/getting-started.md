@@ -109,7 +109,7 @@ The `hotmint-node` binary accepts the following flags:
 | Flag | Description | Default |
 |:-----|:------------|:--------|
 | `--home <PATH>` | Set the home directory for config and data | `~/.hotmint` |
-| `node --proxy-app <ADDR>` | Unix socket address of the ABCI application | `unix:///tmp/hotmint.sock` |
+| `node --proxy-app <ADDR>` | Unix socket address of the ABCI application | `""` (empty; no-op app used when not set) |
 | `node --p2p-laddr <ADDR>` | P2P listen address (multiaddr format) | `/ip4/0.0.0.0/tcp/20000` |
 | `node --rpc-laddr <ADDR>` | JSON-RPC listen address | `127.0.0.1:20001` |
 
