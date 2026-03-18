@@ -76,7 +76,7 @@ async fn ipc_consensus_e2e() {
     let validator_set = ValidatorSet::new(validator_infos);
 
     let mut receivers = HashMap::new();
-    let mut all_senders: HashMap<ValidatorId, mpsc::Sender<(ValidatorId, ConsensusMessage)>> =
+    let mut all_senders: HashMap<ValidatorId, mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>> =
         HashMap::new();
     for i in 0..NUM_VALIDATORS {
         let (tx, rx) = mpsc::channel(8192);

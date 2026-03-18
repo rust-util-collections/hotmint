@@ -84,6 +84,7 @@ fn spawn_node(
 ) -> (
     mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>,
     tokio::task::JoinHandle<()>,
+) {
     let (tx, rx) = mpsc::channel(8192);
     routing.register(vid, tx.clone());
 

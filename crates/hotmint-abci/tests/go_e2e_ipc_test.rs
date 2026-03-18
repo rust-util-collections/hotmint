@@ -103,7 +103,7 @@ async fn go_ipc_consensus_e2e() {
 
     // Set up channel-based networking.
     let mut receivers = HashMap::new();
-    let mut all_senders: HashMap<ValidatorId, mpsc::Sender<(ValidatorId, ConsensusMessage)>> =
+    let mut all_senders: HashMap<ValidatorId, mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>> =
         HashMap::new();
     for i in 0..NUM_VALIDATORS {
         let (tx, rx) = mpsc::channel(8192);

@@ -359,6 +359,8 @@ async fn run_node(
         state.current_epoch.start_view.as_u64(),
     ));
     let sync_status_rx = status_tx.subscribe();
+    // Extra subscriber for the reconnect re-sync watcher (tracks last_committed_height)
+    let watcher_status_rx = status_tx.subscribe();
 
     // Validator set watch channel (updated on epoch transitions via on_commit)
     let initial_vs: Vec<hotmint::api::types::ValidatorInfoResponse> = validator_set
@@ -559,6 +561,8 @@ async fn run_node(
         let watcher_peers = sync_peers.clone();
         let mut watcher_resp_rx = sync_resp_rx;
         let watcher_epoch_rx = epoch_rx;
+        // watcher_status_rx provides last_committed_height from the running engine
+        let watcher_status_rx = watcher_status_rx;
 
         tokio::spawn(async move {
             use hotmint_types::sync::SyncRequest;
@@ -573,10 +577,10 @@ async fn run_node(
                 if prev_count == 0 && count > 0 {
                     info!("reconnected to peers, triggering block re-sync");
                     let current_epoch = watcher_epoch_rx.borrow().clone();
-                    let current_height = {
-                        let s = watcher_store.read().unwrap_or_else(|e| e.into_inner());
-                        s.tip_height()
-                    };
+                    // Use last_committed_height from the consensus status, not tip_height,
+                    // to avoid skipping uncommitted/proposed blocks that are already stored.
+                    let current_height =
+                        Height(watcher_status_rx.borrow().last_committed_height);
                     let mut h = current_height;
                     let mut epoch = current_epoch;
                     // NoopApplication: app_hash is carried from blocks, initial value irrelevant
