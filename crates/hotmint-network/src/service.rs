@@ -722,6 +722,13 @@ impl NetworkService {
                 debug!(peer = %peer, "connection closed");
                 self.connected_peers.remove(&peer);
                 let _ = self.connected_count_tx.send(self.connected_peers.len());
+                // Eagerly remove from notif set; NotificationStreamClosed may
+                // arrive late or not at all when the TCP connection drops first.
+                if self.notif_connected_peers.remove(&peer) {
+                    let _ = self
+                        .notif_connected_count_tx
+                        .send(self.notif_connected_peers.len());
+                }
             }
             Litep2pEvent::DialFailure { address, error, .. } => {
                 warn!(address = %address, error = ?error, "dial failed");

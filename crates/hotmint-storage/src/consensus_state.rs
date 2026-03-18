@@ -140,3 +140,36 @@ impl Default for PersistentConsensusState {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hotmint_types::{BlockHash, Height, ViewNumber};
+
+    #[test]
+    fn last_app_hash_round_trips() {
+        let mut pcs = PersistentConsensusState::new();
+        assert_eq!(pcs.load_last_app_hash(), None);
+
+        let hash = BlockHash([0xAB; 32]);
+        pcs.save_last_app_hash(hash);
+        assert_eq!(pcs.load_last_app_hash(), Some(hash));
+
+        // Overwrite with a different value
+        let hash2 = BlockHash([0xCD; 32]);
+        pcs.save_last_app_hash(hash2);
+        assert_eq!(pcs.load_last_app_hash(), Some(hash2));
+    }
+
+    #[test]
+    fn all_fields_independent() {
+        let mut pcs = PersistentConsensusState::new();
+        pcs.save_current_view(ViewNumber(42));
+        pcs.save_last_committed_height(Height(7));
+        pcs.save_last_app_hash(BlockHash([0xFF; 32]));
+
+        assert_eq!(pcs.load_current_view(), Some(ViewNumber(42)));
+        assert_eq!(pcs.load_last_committed_height(), Some(Height(7)));
+        assert_eq!(pcs.load_last_app_hash(), Some(BlockHash([0xFF; 32])));
+    }
+}
