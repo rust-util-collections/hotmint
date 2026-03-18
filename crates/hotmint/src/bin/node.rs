@@ -412,8 +412,9 @@ async fn run_node(
     let network_handle = tokio::spawn(async move { network_service.run().await });
     let rpc_handle = tokio::spawn(async move { rpc_server.run().await });
 
-    // Sync responder: answer incoming sync requests from peers
-    {
+    // Sync responder: answer incoming sync requests from peers.
+    // Capture JoinHandle so the supervisor can detect unexpected exits.
+    let sync_responder_handle = {
         let store = store.clone();
         let sync_status_rx = sync_status_rx;
         let mut sync_req_rx = sync_req_rx;
@@ -454,8 +455,8 @@ async fn run_node(
                 };
                 sync_sink.send_sync_response(req.request_id, &resp);
             }
-        });
-    }
+        })
+    };
 
     // 14. Sync catch-up before starting consensus (if peers configured)
     // Parse sync peers once — used for both initial sync and the reconnect watcher.
@@ -554,7 +555,8 @@ async fn run_node(
     // the node reconnects to peers (notif_count goes 0→>0) and re-sync the store.
     // Uses NoopApplication to avoid double-executing blocks via ABCI — the running
     // engine will fast-forward through the newly stored blocks on the next DC received.
-    if !sync_peers.is_empty() {
+    // Always capture the JoinHandle so the supervisor select! can detect panic/unexpected exit.
+    let reconnect_watcher_handle = if !sync_peers.is_empty() {
         let mut watcher_notif_rx = notif_count_rx;
         let watcher_store = store.clone();
         let watcher_sink = sync_sink.clone();
@@ -624,8 +626,12 @@ async fn run_node(
                 }
                 prev_count = count;
             }
-        });
-    }
+        })
+    } else {
+        // No peers configured: spawn a permanently-pending task so the select! arm
+        // has a consistent type without needing special-casing.
+        tokio::spawn(std::future::pending())
+    };
 
     // 15. Write back synced state and create consensus engine
     // (Engine is created after sync so it starts with up-to-date state)
@@ -676,8 +682,9 @@ async fn run_node(
     info!("consensus engine starting");
 
     // 16. Run consensus engine (blocks forever).
-    // Supervise the network and RPC tasks: if either exits unexpectedly, log the
-    // reason and abort the process so the OS process manager can restart the node.
+    // Supervise the network, RPC, sync responder, and reconnect watcher tasks:
+    // if any exits unexpectedly, log the reason and abort the process so the OS
+    // process manager can restart the node.
     tokio::select! {
         () = engine.run() => {},
         res = network_handle => {
@@ -691,6 +698,20 @@ async fn run_node(
             match res {
                 Ok(()) => error!("RPC server exited unexpectedly"),
                 Err(e) => error!("RPC server panicked: {e}"),
+            }
+            std::process::exit(1);
+        }
+        res = sync_responder_handle => {
+            match res {
+                Ok(()) => error!("sync responder exited unexpectedly"),
+                Err(e) => error!("sync responder panicked: {e}"),
+            }
+            std::process::exit(1);
+        }
+        res = reconnect_watcher_handle => {
+            match res {
+                Ok(()) => error!("reconnect watcher exited unexpectedly"),
+                Err(e) => error!("reconnect watcher panicked: {e}"),
             }
             std::process::exit(1);
         }

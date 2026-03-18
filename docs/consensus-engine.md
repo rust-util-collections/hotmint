@@ -15,7 +15,7 @@ pub struct ConsensusEngine {
     vote_collector: VoteCollector,
     pacemaker: Pacemaker,
     pacemaker_config: PacemakerConfig,
-    msg_rx: Receiver<(ValidatorId, ConsensusMessage)>,
+    msg_rx: Receiver<(Option<ValidatorId>, ConsensusMessage)>,
     status_senders: HashSet<ValidatorId>,
     current_view_qc: Option<QuorumCertificate>,
     pending_epoch: Option<Epoch>,
@@ -41,7 +41,7 @@ let engine = ConsensusEngine::new(
     Box::new(network_sink),   // impl NetworkSink
     Box::new(application),    // impl Application
     Box::new(signer),         // impl Signer
-    msg_rx,                   // Receiver<(ValidatorId, ConsensusMessage)>
+    msg_rx,                   // Receiver<(Option<ValidatorId>, ConsensusMessage)>
     EngineConfig {
         verifier: Box::new(Ed25519Verifier),
         pacemaker: None,
@@ -50,7 +50,7 @@ let engine = ConsensusEngine::new(
 );
 ```
 
-The `msg_rx` channel is the engine's sole input. All consensus messages — whether from the network or from loopback — arrive through this channel as `(sender_id, message)` tuples.
+The `msg_rx` channel is the engine's sole input. All consensus messages — whether from the network or from loopback — arrive through this channel as `(Option<sender_id>, message)` tuples. The sender is `Some(ValidatorId)` for authenticated validators and `None` for unknown/unauthenticated peers.
 
 ## Running
 

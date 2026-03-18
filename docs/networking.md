@@ -246,13 +246,13 @@ impl NetworkSink for MyNetworkSink {
 }
 ```
 
-You also need to provide the `mpsc::Receiver<(ValidatorId, ConsensusMessage)>` to the engine. When your network layer receives a message, deserialize it and send it through the channel:
+You also need to provide the `mpsc::Receiver<(Option<ValidatorId>, ConsensusMessage)>` to the engine. When your network layer receives a message, deserialize it and send it through the channel. Use `Some(sender_id)` for known validators and `None` for unknown/unauthenticated peers:
 
 ```rust
 let (msg_tx, msg_rx) = tokio::sync::mpsc::channel(8192);
 
 // in your network receive loop:
-let sender_id = identify_sender(&peer);
+let sender_id = identify_sender(&peer); // Option<ValidatorId>
 let msg: ConsensusMessage = serde_cbor_2::from_slice(&bytes).unwrap();
 msg_tx.send((sender_id, msg)).unwrap();
 
