@@ -132,6 +132,9 @@ pub struct NetworkService {
     /// Public keys of known validators, used to verify individual message signatures
     /// before relaying.  Updated on epoch transitions via [`NetCommand::EpochChange`].
     validator_keys: std::collections::HashMap<ValidatorId, hotmint_types::crypto::PublicKey>,
+    /// Validators in round-robin order for leader-for-view computation.
+    /// Must match the ordering in `ValidatorSet::validators()`.
+    validator_ids_ordered: Vec<ValidatorId>,
     msg_tx: mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>,
     cmd_rx: mpsc::Receiver<NetCommand>,
     sync_req_tx: mpsc::Sender<IncomingSyncRequest>,
@@ -247,6 +250,8 @@ impl NetworkService {
         // Save persistent peers for auto-reconnect
         let persistent_peers: HashMap<ValidatorId, PeerId> = peer_map.validator_to_peer.clone();
 
+        let validator_ids_ordered: Vec<ValidatorId> =
+            initial_validators.iter().map(|(vid, _)| *vid).collect();
         let validator_keys: std::collections::HashMap<ValidatorId, hotmint_types::crypto::PublicKey> =
             initial_validators.into_iter().collect();
 
@@ -264,6 +269,7 @@ impl NetworkService {
                 initial_dial_addresses,
                 relay_consensus,
                 validator_keys,
+                validator_ids_ordered,
                 msg_tx,
                 cmd_rx,
                 sync_req_tx,
@@ -390,6 +396,7 @@ impl NetworkService {
                                 sid,
                                 &msg,
                                 &self.validator_keys,
+                                &self.validator_ids_ordered,
                             )
                         {
                             let mut hasher = std::hash::DefaultHasher::new();
@@ -806,6 +813,7 @@ impl NetworkService {
                     self.peer_map.remove(vid);
                 }
                 // Update relay verification key map to match new epoch
+                self.validator_ids_ordered = validators.iter().map(|(vid, _)| *vid).collect();
                 self.validator_keys = validators.into_iter().collect();
                 self.update_peer_info();
             }

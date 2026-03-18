@@ -352,13 +352,19 @@ impl ConsensusEngine {
 /// check.  Messages whose signing bytes depend on receiver state (StatusCert needs
 /// `current_view`) are also allowed through; the engine will reject them if invalid.
 ///
+/// `ordered_validators` is the validator list in round-robin order (same order used by
+/// `ValidatorSet::leader_for_view`).  Pass an empty slice to skip the leader-for-view
+/// check (e.g., in tests where the set is not available).
+///
 /// Returns `false` when:
 /// - The claimed sender is not in `validator_keys` (unknown/non-validator peer), OR
-/// - The individual signature is cryptographically invalid.
+/// - The individual signature is cryptographically invalid, OR
+/// - For Prepare: the sender is not the leader for the certificate's view.
 pub fn verify_relay_sender(
     sender: ValidatorId,
     msg: &ConsensusMessage,
     validator_keys: &std::collections::HashMap<ValidatorId, hotmint_types::crypto::PublicKey>,
+    ordered_validators: &[ValidatorId],
 ) -> bool {
     use hotmint_crypto::Ed25519Verifier;
     use hotmint_types::vote::Vote;
@@ -388,8 +394,16 @@ pub fn verify_relay_sender(
             certificate,
             signature,
         } => {
-            // Prepare is broadcast by the current leader; the relay `sender` is the
-            // leader, so verify against the sender's key.
+            // Prepare is broadcast by the current leader. Verify that the relay
+            // sender is the leader for this view, then check the signature.
+            if !ordered_validators.is_empty() {
+                let n = ordered_validators.len();
+                let expected_leader =
+                    ordered_validators[certificate.view.as_u64() as usize % n];
+                if sender != expected_leader {
+                    return false;
+                }
+            }
             let Some(pk) = validator_keys.get(&sender) else {
                 return false;
             };

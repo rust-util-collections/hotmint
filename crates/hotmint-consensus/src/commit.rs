@@ -5,7 +5,7 @@ use crate::store::BlockStore;
 use hotmint_types::context::BlockContext;
 use hotmint_types::epoch::Epoch;
 use hotmint_types::{Block, BlockHash, DoubleCertificate, Height, ViewNumber};
-use tracing::info;
+use tracing::{info, warn};
 
 /// Result of a commit operation
 pub struct CommitResult {
@@ -105,6 +105,25 @@ pub fn try_commit(
         let response = app
             .execute_block(&txs, &ctx)
             .c(d!("execute_block failed"))?;
+
+        // Self-consistency check: after executing the block, the application's
+        // produced app_hash must match the block's declared app_hash.
+        // This catches state divergence on both the normal-commit and fast-forward
+        // commit paths before the divergence propagates further.
+        if app.tracks_app_hash() && response.app_hash != block.app_hash {
+            warn!(
+                height = block.height.as_u64(),
+                block_app_hash = %block.app_hash,
+                computed_app_hash = %response.app_hash,
+                "app_hash mismatch after execute_block — local state diverged from chain"
+            );
+            return Err(eg!(
+                "app_hash mismatch at height {}: block {} != computed {}",
+                block.height.as_u64(),
+                block.app_hash,
+                response.app_hash
+            ));
+        }
 
         app.on_commit(block, &ctx)
             .c(d!("application commit failed"))?;
