@@ -118,7 +118,7 @@ impl Pacemaker {
         signer: &dyn hotmint_types::Signer,
     ) -> ConsensusMessage {
         let target_view = current_view.next();
-        let msg_bytes = wish_signing_bytes(target_view);
+        let msg_bytes = wish_signing_bytes(target_view, highest_qc.as_ref());
         let signature = signer.sign(&msg_bytes);
         ConsensusMessage::Wish {
             target_view,
@@ -197,10 +197,23 @@ impl Pacemaker {
     }
 }
 
-pub(crate) fn wish_signing_bytes(target_view: ViewNumber) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(9);
+pub(crate) fn wish_signing_bytes(
+    target_view: ViewNumber,
+    highest_qc: Option<&QuorumCertificate>,
+) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(42);
     buf.push(b'W');
     buf.extend_from_slice(&target_view.as_u64().to_le_bytes());
+    // Bind the highest_qc to prevent replay with a different QC.
+    // Canonical encoding: 0x00 = None, 0x01 + view_le + hash = Some.
+    match highest_qc {
+        None => buf.push(0x00),
+        Some(qc) => {
+            buf.push(0x01);
+            buf.extend_from_slice(&qc.view.as_u64().to_le_bytes());
+            buf.extend_from_slice(&qc.block_hash.0);
+        }
+    }
     buf
 }
 
