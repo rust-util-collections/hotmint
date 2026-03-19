@@ -230,17 +230,6 @@ pub fn on_proposal(
         ));
     }
 
-    // Verify app_hash matches local state.
-    // Skip when the application does not track state roots (e.g. fullnode
-    // running NoopApplication against a chain produced by a real ABCI app).
-    if app.tracks_app_hash() && block.app_hash != state.last_app_hash {
-        return Err(eg!(
-            "app_hash mismatch: block {} != local {}",
-            block.app_hash,
-            state.last_app_hash
-        ));
-    }
-
     let ctx = BlockContext {
         height: block.height,
         view: block.view,
@@ -260,7 +249,13 @@ pub fn on_proposal(
     // Update highest QC
     state.update_highest_qc(&justify);
 
-    // Try commit if double cert present (fast-forward)
+    // Fast-forward commit via double cert (if present).
+    // IMPORTANT: this MUST happen BEFORE the app_hash check below.
+    // block.app_hash = state-after-parent, and the DC in this proposal commits
+    // the parent block, producing that exact state root.  Processing the DC
+    // first keeps state.last_app_hash in sync so the check below is consistent
+    // for both the leader (who committed the parent independently) and replicas
+    // (who commit the parent only via this DC).
     let mut pending_epoch = None;
     if let Some(ref dc) = double_cert {
         match try_commit(
@@ -280,6 +275,17 @@ pub fn on_proposal(
                 warn!(error = %e, "try_commit failed during fast-forward in on_proposal");
             }
         }
+    }
+
+    // Verify app_hash matches local state AFTER fast-forward commit.
+    // Skip when the application does not track state roots (e.g. fullnode
+    // running NoopApplication against a chain produced by a real ABCI app).
+    if app.tracks_app_hash() && block.app_hash != state.last_app_hash {
+        return Err(eg!(
+            "app_hash mismatch: block {} != local {}",
+            block.app_hash,
+            state.last_app_hash
+        ));
     }
 
     // Vote (first phase) → send to current leader (only if we have voting power)
