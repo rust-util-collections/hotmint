@@ -480,6 +480,10 @@ impl ConsensusEngine {
                         warn!(proposer = %block.proposer, "invalid justify QC aggregate signature");
                         return false;
                     }
+                    if !hotmint_crypto::has_quorum(vs, &justify.aggregate_signature) {
+                        warn!(proposer = %block.proposer, "justify QC below quorum threshold");
+                        return false;
+                    }
                 }
                 true
             }
@@ -509,7 +513,7 @@ impl ConsensusEngine {
                     warn!(view = %certificate.view, "invalid prepare signature");
                     return false;
                 }
-                // Also verify the QC's aggregate signature
+                // Also verify the QC's aggregate signature and quorum
                 let qc_bytes =
                     Vote::signing_bytes(certificate.view, &certificate.block_hash, VoteType::Vote);
                 if !self
@@ -517,6 +521,10 @@ impl ConsensusEngine {
                     .verify_aggregate(vs, &qc_bytes, &certificate.aggregate_signature)
                 {
                     warn!(view = %certificate.view, "invalid QC aggregate signature");
+                    return false;
+                }
+                if !hotmint_crypto::has_quorum(vs, &certificate.aggregate_signature) {
+                    warn!(view = %certificate.view, "Prepare QC below quorum threshold");
                     return false;
                 }
                 true
@@ -1041,30 +1049,32 @@ impl ConsensusEngine {
 
     /// Cryptographically validate a DoubleCertificate:
     /// 1. inner and outer QC must reference the same block hash
-    /// 2. inner QC aggregate signature (Vote1) must be valid against current validator set
-    /// 3. outer QC aggregate signature (Vote2) must be valid against current validator set
+    /// 2. inner QC aggregate signature (Vote1) must be valid and reach quorum
+    /// 3. outer QC aggregate signature (Vote2) must be valid and reach quorum
     ///
-    /// We deliberately do NOT enforce a quorum count here because:
-    /// - DCs may be formed in a prior epoch whose quorum threshold differs from the current one.
-    /// - The quorum requirement is already enforced at DC-formation time by the vote_collector.
-    /// - Any forged DC (sub-quorum or invalid sigs) cannot pass the verify_aggregate step
-    ///   because constructing a valid signature requires the validator's private key.
+    /// Note on quorum and epoch transitions: DCs are always formed in the same epoch as
+    /// the block they commit (vote_collector enforces quorum at formation time).  When
+    /// a DC is received by a node that has already transitioned to a new epoch, the
+    /// validator set may differ.  We enforce quorum against the current validator set
+    /// as the best available reference; a legitimate DC from a prior epoch should still
+    /// satisfy quorum against the new set unless the set shrank significantly.
     fn validate_double_cert(&self, dc: &DoubleCertificate) -> bool {
         if dc.inner_qc.block_hash != dc.outer_qc.block_hash {
             warn!("double cert inner/outer block_hash mismatch");
             return false;
         }
+        let vs = &self.state.validator_set;
         let inner_bytes = Vote::signing_bytes(
             dc.inner_qc.view,
             &dc.inner_qc.block_hash,
             VoteType::Vote,
         );
-        if !self.verifier.verify_aggregate(
-            &self.state.validator_set,
-            &inner_bytes,
-            &dc.inner_qc.aggregate_signature,
-        ) {
+        if !self.verifier.verify_aggregate(vs, &inner_bytes, &dc.inner_qc.aggregate_signature) {
             warn!("double cert inner QC signature invalid");
+            return false;
+        }
+        if !hotmint_crypto::has_quorum(vs, &dc.inner_qc.aggregate_signature) {
+            warn!("double cert inner QC below quorum threshold");
             return false;
         }
         let outer_bytes = Vote::signing_bytes(
@@ -1072,12 +1082,12 @@ impl ConsensusEngine {
             &dc.outer_qc.block_hash,
             VoteType::Vote2,
         );
-        if !self.verifier.verify_aggregate(
-            &self.state.validator_set,
-            &outer_bytes,
-            &dc.outer_qc.aggregate_signature,
-        ) {
+        if !self.verifier.verify_aggregate(vs, &outer_bytes, &dc.outer_qc.aggregate_signature) {
             warn!("double cert outer QC signature invalid");
+            return false;
+        }
+        if !hotmint_crypto::has_quorum(vs, &dc.outer_qc.aggregate_signature) {
+            warn!("double cert outer QC below quorum threshold");
             return false;
         }
         true

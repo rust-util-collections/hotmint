@@ -152,7 +152,7 @@ pub fn replay_blocks(
                     block.hash
                 ));
             }
-            // Verify QC aggregate signature
+            // Verify QC aggregate signature and quorum
             let verifier = hotmint_crypto::Ed25519Verifier;
             let qc_bytes = hotmint_types::vote::Vote::signing_bytes(
                 cert.view,
@@ -167,6 +167,12 @@ pub fn replay_blocks(
             ) {
                 return Err(eg!(
                     "sync QC signature verification failed at height {}",
+                    block.height.as_u64()
+                ));
+            }
+            if !hotmint_crypto::has_quorum(&current_epoch.validator_set, &cert.aggregate_signature) {
+                return Err(eg!(
+                    "sync QC below quorum threshold at height {}",
                     block.height.as_u64()
                 ));
             }
