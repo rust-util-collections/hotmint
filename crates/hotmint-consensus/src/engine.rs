@@ -784,7 +784,8 @@ impl ConsensusEngine {
                 highest_qc,
                 signature,
             } => {
-                // Validate carried highest_qc (C4 mitigation)
+                // Validate carried highest_qc (C4 mitigation).
+                // Both signature authenticity and 2f+1 quorum weight must pass.
                 if let Some(ref qc) = highest_qc
                     && qc.aggregate_signature.count() > 0
                 {
@@ -794,7 +795,11 @@ impl ConsensusEngine {
                         &qc_bytes,
                         &qc.aggregate_signature,
                     ) {
-                        warn!(validator = %validator, "wish carries invalid highest_qc");
+                        warn!(validator = %validator, "wish carries invalid highest_qc signature");
+                        return Ok(());
+                    }
+                    if !hotmint_crypto::has_quorum(&self.state.validator_set, &qc.aggregate_signature) {
+                        warn!(validator = %validator, "wish carries highest_qc without quorum");
                         return Ok(());
                     }
                 }
