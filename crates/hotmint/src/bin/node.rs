@@ -399,22 +399,28 @@ async fn run_node(
         validator_set_rx: vs_rx,
         app: Some(app.clone()),
     };
-    let rpc_server = hotmint::api::rpc::RpcServer::bind(&config.rpc.laddr, rpc_state)
-        .await
-        .c(d!("failed to bind RPC server"))?;
-
-    info!(rpc_addr = %config.rpc.laddr, "RPC server listening");
+    // 12. Spawn network + RPC before sync (sync needs the network running).
+    // Capture JoinHandles to detect unexpected exits and abort the process.
+    // Respect serve_rpc / serve_sync config flags: when disabled, spawn a
+    // permanently-pending task to keep the supervisor select! arms typed consistently.
+    let network_handle = tokio::spawn(async move { network_service.run().await });
+    let rpc_handle: tokio::task::JoinHandle<()> = if config.node.serve_rpc {
+        let rpc_server = hotmint::api::rpc::RpcServer::bind(&config.rpc.laddr, rpc_state)
+            .await
+            .c(d!("failed to bind RPC server"))?;
+        info!(rpc_addr = %config.rpc.laddr, "RPC server listening");
+        tokio::spawn(async move { rpc_server.run().await })
+    } else {
+        info!("RPC server disabled by config (serve_rpc = false)");
+        tokio::spawn(std::future::pending())
+    };
 
     let sync_sink = network_sink.clone();
 
-    // 12. Spawn network + RPC before sync (sync needs the network running).
-    // Capture JoinHandles to detect unexpected exits and abort the process.
-    let network_handle = tokio::spawn(async move { network_service.run().await });
-    let rpc_handle = tokio::spawn(async move { rpc_server.run().await });
-
     // Sync responder: answer incoming sync requests from peers.
-    // Capture JoinHandle so the supervisor can detect unexpected exits.
-    let sync_responder_handle = {
+    // Gated by config.node.serve_sync; when disabled, spawn a permanently-pending
+    // task so the supervisor select! arm has a consistent JoinHandle type.
+    let sync_responder_handle: tokio::task::JoinHandle<()> = if config.node.serve_sync {
         let store = store.clone();
         let sync_status_rx = sync_status_rx;
         let mut sync_req_rx = sync_req_rx;
@@ -456,6 +462,9 @@ async fn run_node(
                 sync_sink.send_sync_response(req.request_id, &resp);
             }
         })
+    } else {
+        info!("sync responder disabled by config (serve_sync = false)");
+        tokio::spawn(std::future::pending())
     };
 
     // 14. Sync catch-up before starting consensus (if peers configured)
