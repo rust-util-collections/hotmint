@@ -1187,3 +1187,183 @@ impl ConsensusEngine {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Regression tests for sub-quorum certificate injection (R-29, R-32)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::{Arc, RwLock};
+
+    use hotmint_crypto::{Ed25519Signer, Ed25519Verifier};
+    use hotmint_types::certificate::QuorumCertificate;
+    use hotmint_types::crypto::AggregateSignature;
+    use hotmint_types::validator::{ValidatorId, ValidatorInfo};
+    use hotmint_types::vote::{Vote, VoteType};
+    use hotmint_types::Signer as SignerTrait;
+    use tokio::sync::mpsc;
+
+    use crate::application::NoopApplication;
+    use crate::network::NetworkSink;
+    use crate::state::ConsensusState;
+    use crate::store::MemoryBlockStore;
+
+    // Minimal no-op network for unit tests — messages are silently discarded.
+    struct DevNullNetwork;
+    impl NetworkSink for DevNullNetwork {
+        fn broadcast(&self, _: ConsensusMessage) {}
+        fn send_to(&self, _: ValidatorId, _: ConsensusMessage) {}
+    }
+
+    fn make_validator_set_4() -> (ValidatorSet, Vec<Ed25519Signer>) {
+        let signers: Vec<Ed25519Signer> =
+            (0..4).map(|i| Ed25519Signer::generate(ValidatorId(i))).collect();
+        let infos: Vec<ValidatorInfo> = signers
+            .iter()
+            .map(|s| ValidatorInfo { id: s.validator_id(), public_key: s.public_key(), power: 1 })
+            .collect();
+        (ValidatorSet::new(infos), signers)
+    }
+
+    fn make_test_engine(
+        vid: ValidatorId,
+        vs: ValidatorSet,
+        signer: Ed25519Signer,
+    ) -> (ConsensusEngine, mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>) {
+        let (tx, rx) = mpsc::channel(64);
+        let store = Arc::new(RwLock::new(
+            Box::new(MemoryBlockStore::new()) as Box<dyn crate::store::BlockStore>
+        ));
+        let state = ConsensusState::new(vid, vs);
+        let engine = ConsensusEngine::new(
+            state,
+            store,
+            Box::new(DevNullNetwork),
+            Box::new(NoopApplication),
+            Box::new(signer),
+            rx,
+            EngineConfig {
+                verifier: Box::new(Ed25519Verifier),
+                pacemaker: None,
+                persistence: None,
+            },
+        );
+        (engine, tx)
+    }
+
+    // R-29 regression: a Propose message whose justify QC is signed by fewer than
+    // 2f+1 validators must be rejected by verify_message().
+    #[test]
+    fn r29_propose_sub_quorum_justify_rejected_by_verify_message() {
+        let (vs, signers) = make_validator_set_4();
+        // Use a fresh signer for the engine; verify_message only needs the engine's
+        // validator set and verifier, not its own signing key.
+        let engine_signer = Ed25519Signer::generate(ValidatorId(0));
+        let (engine, _tx) = make_test_engine(ValidatorId(0), vs.clone(), engine_signer);
+
+        // Build a justify QC signed by exactly 1 of 4 validators — below 2f+1 = 3.
+        let hash = BlockHash::GENESIS;
+        let qc_view = ViewNumber::GENESIS;
+        let vote_bytes = Vote::signing_bytes(qc_view, &hash, VoteType::Vote);
+        let mut agg = AggregateSignature::new(4);
+        agg.add(1, SignerTrait::sign(&signers[1], &vote_bytes)).unwrap();
+        let sub_quorum_qc = QuorumCertificate { block_hash: hash, view: qc_view, aggregate_signature: agg };
+
+        // Construct a proposal from V1 carrying this sub-quorum justify.
+        let mut block = Block::genesis();
+        block.height = Height(1);
+        block.view = ViewNumber(1);
+        block.proposer = ValidatorId(1);
+        block.hash = block.compute_hash();
+        let proposal_bytes = crate::view_protocol::proposal_signing_bytes(&block, &sub_quorum_qc);
+        let signature = SignerTrait::sign(&signers[1], &proposal_bytes);
+
+        let msg = ConsensusMessage::Propose {
+            block: Box::new(block),
+            justify: Box::new(sub_quorum_qc),
+            double_cert: None,
+            signature,
+        };
+
+        assert!(
+            !engine.verify_message(&msg),
+            "R-29 regression: Propose with sub-quorum justify QC must be rejected by verify_message"
+        );
+    }
+
+    // R-29 regression: a Propose message with a full quorum justify QC (3/4) must pass.
+    #[test]
+    fn r29_propose_full_quorum_justify_accepted_by_verify_message() {
+        let (vs, signers) = make_validator_set_4();
+        let engine_signer = Ed25519Signer::generate(ValidatorId(0));
+        let (engine, _tx) = make_test_engine(ValidatorId(0), vs.clone(), engine_signer);
+
+        let hash = BlockHash::GENESIS;
+        let qc_view = ViewNumber::GENESIS;
+        let vote_bytes = Vote::signing_bytes(qc_view, &hash, VoteType::Vote);
+        // 3 of 4 signers — meets 2f+1 threshold.
+        let mut agg = AggregateSignature::new(4);
+        for (i, signer) in signers.iter().take(3).enumerate() {
+            agg.add(i, SignerTrait::sign(signer, &vote_bytes)).unwrap();
+        }
+        let full_quorum_qc = QuorumCertificate { block_hash: hash, view: qc_view, aggregate_signature: agg };
+
+        let mut block = Block::genesis();
+        block.height = Height(1);
+        block.view = ViewNumber(1);
+        block.proposer = ValidatorId(1);
+        block.hash = block.compute_hash();
+        let proposal_bytes = crate::view_protocol::proposal_signing_bytes(&block, &full_quorum_qc);
+        let signature = SignerTrait::sign(&signers[1], &proposal_bytes);
+
+        let msg = ConsensusMessage::Propose {
+            block: Box::new(block),
+            justify: Box::new(full_quorum_qc),
+            double_cert: None,
+            signature,
+        };
+
+        assert!(
+            engine.verify_message(&msg),
+            "R-29: Propose with full quorum justify QC must pass verify_message"
+        );
+    }
+
+    // R-32 regression: a Wish carrying a sub-quorum highest_qc must cause
+    // verify_highest_qc_in_wish to treat the QC as invalid and return false,
+    // which causes handle_message to discard the Wish without forwarding it
+    // to the pacemaker.
+    //
+    // We verify the sub-component: has_quorum returns false for a 1-of-4 aggregate,
+    // ensuring the guard in handle_message fires.
+    #[test]
+    fn r32_sub_quorum_highest_qc_fails_has_quorum() {
+        let (vs, signers) = make_validator_set_4();
+
+        let hash = BlockHash([1u8; 32]);
+        let qc_view = ViewNumber(1);
+        let vote_bytes = Vote::signing_bytes(qc_view, &hash, VoteType::Vote);
+
+        // Build a QC with only 1 signer — sub-quorum.
+        let mut agg = AggregateSignature::new(4);
+        agg.add(0, SignerTrait::sign(&signers[0], &vote_bytes)).unwrap();
+
+        assert!(
+            !hotmint_crypto::has_quorum(&vs, &agg),
+            "R-32 regression: 1-of-4 signed QC must not satisfy has_quorum"
+        );
+
+        // Build a QC with 3 signers — full quorum.
+        let mut agg_full = AggregateSignature::new(4);
+        for (i, signer) in signers.iter().take(3).enumerate() {
+            agg_full.add(i, SignerTrait::sign(signer, &vote_bytes)).unwrap();
+        }
+        assert!(
+            hotmint_crypto::has_quorum(&vs, &agg_full),
+            "R-32: 3-of-4 signed QC must satisfy has_quorum"
+        );
+    }
+}

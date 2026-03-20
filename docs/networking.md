@@ -197,8 +197,25 @@ async fn run_validator(
     }
 
     // P2P networking
-    let (net_service, network_sink, msg_rx, sync_req_rx, sync_resp_rx, peer_info_rx, connected_count_rx) =
-        NetworkService::create(listen_addr, peer_map, known_addresses, None, peer_book, pex_config).unwrap();
+    let NetworkServiceHandles {
+        service: net_service,
+        sink: network_sink,
+        msg_rx,
+        sync_req_rx,
+        sync_resp_rx,
+        peer_info_rx,
+        connected_count_rx,
+        notif_connected_count_rx,
+    } = NetworkService::create(
+        listen_addr,
+        peer_map,
+        known_addresses,
+        None,
+        peer_book,
+        pex_config,
+        false,           // relay_consensus
+        validator_keys,  // initial validator keys for relay sender verification
+    ).unwrap();
     tokio::spawn(async move { net_service.run().await });
 
     // consensus engine

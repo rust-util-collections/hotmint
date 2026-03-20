@@ -90,6 +90,7 @@ pub struct ConsensusState {
     pub highest_double_cert: Option<DoubleCertificate>,
     pub highest_qc: Option<QuorumCertificate>,
     pub last_committed_height: Height,
+    pub last_app_hash: BlockHash,     // state root after executing the most recently committed block
 }
 ```
 

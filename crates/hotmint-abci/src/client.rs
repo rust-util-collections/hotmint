@@ -103,10 +103,19 @@ impl Application for IpcApplicationClient {
         match self.call(&req) {
             Ok(Response::ValidateBlock(ok)) => ok,
             Ok(other) => {
-                panic!("IPC_FAULT: unexpected response for validate_block: {other:?}");
+                // Unexpected response variant: reject the block so the view times out
+                // and the leader can re-propose. The node stays live and can recover
+                // once the ABCI process sends correct responses again.
+                tracing::error!(?other, "IPC_FAULT: unexpected response for validate_block — rejecting block");
+                false
             }
             Err(e) => {
-                panic!("IPC_FAULT: validate_block call failed — cannot safely validate block without ABCI: {e}");
+                // IPC fault: reset the cached connection so the next call reconnects,
+                // then reject the block. The view will time out and the leader will
+                // re-propose; once ABCI recovers the node resumes normal operation.
+                *self.conn.lock().unwrap_or_else(|p| p.into_inner()) = None;
+                tracing::error!(%e, "IPC_FAULT: validate_block call failed — rejecting block until ABCI recovers");
+                false
             }
         }
     }
