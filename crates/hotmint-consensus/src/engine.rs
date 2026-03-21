@@ -1,6 +1,6 @@
 use ruc::*;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 use crate::application::Application;
@@ -363,7 +363,7 @@ impl ConsensusEngine {
 pub fn verify_relay_sender(
     sender: ValidatorId,
     msg: &ConsensusMessage,
-    validator_keys: &std::collections::HashMap<ValidatorId, hotmint_types::crypto::PublicKey>,
+    validator_keys: &HashMap<ValidatorId, hotmint_types::crypto::PublicKey>,
     ordered_validators: &[ValidatorId],
 ) -> bool {
     use hotmint_crypto::Ed25519Verifier;

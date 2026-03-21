@@ -1,3 +1,5 @@
+use std::io;
+
 use hotmint_types::Block;
 use hotmint_types::context::{OwnedBlockContext, TxContext};
 use hotmint_types::evidence::EquivocationProof;
@@ -235,7 +237,7 @@ pub fn decode_response(buf: &[u8]) -> Result<Response, prost::DecodeError> {
 pub async fn write_frame(
     writer: &mut (impl tokio::io::AsyncWriteExt + Unpin),
     payload: &[u8],
-) -> std::io::Result<()> {
+) -> io::Result<()> {
     let len = payload.len() as u32;
     writer.write_all(&len.to_le_bytes()).await?;
     writer.write_all(payload).await?;
@@ -248,13 +250,13 @@ const MAX_FRAME_SIZE: usize = 64 * 1024 * 1024;
 /// Read a length-prefixed frame from an async reader.
 pub async fn read_frame(
     reader: &mut (impl tokio::io::AsyncReadExt + Unpin),
-) -> std::io::Result<Vec<u8>> {
+) -> io::Result<Vec<u8>> {
     let mut len_buf = [0u8; 4];
     reader.read_exact(&mut len_buf).await?;
     let len = u32::from_le_bytes(len_buf) as usize;
     if len > MAX_FRAME_SIZE {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
             format!("frame size {len} exceeds max {MAX_FRAME_SIZE}"),
         ));
     }

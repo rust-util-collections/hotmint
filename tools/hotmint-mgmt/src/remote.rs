@@ -1,11 +1,18 @@
 //! Remote (distributed) deployment via SSH.
 
 use ruc::*;
+use std::fs;
 use std::path::Path;
 use std::process;
 
 use crate::cluster::ClusterState;
 use serde::{Deserialize, Serialize};
+
+/// Shell-escape a string by wrapping it in single quotes, with proper handling
+/// of embedded single quotes.  e.g. `foo'bar` → `'foo'\''bar'`
+fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
 
 /// Remote host configuration (from hosts.toml).
 #[derive(Debug, Serialize, Deserialize)]
@@ -34,7 +41,7 @@ fn default_true() -> bool {
 
 impl HostsConfig {
     pub fn load(path: &Path) -> Result<Self> {
-        let contents = std::fs::read_to_string(path).c(d!("read hosts.toml"))?;
+        let contents = fs::read_to_string(path).c(d!("read hosts.toml"))?;
         toml::from_str(&contents).c(d!("parse hosts.toml"))
     }
 }
@@ -78,7 +85,10 @@ fn sync_source(source: &Path, host: &HostEntry, remote_dir: &str) -> Result<()> 
     } else {
         // Use tar|ssh for hosts without rsync (e.g., FreeBSD)
         let cmd = format!(
-            "rm -rf {remote_dir} && mkdir -p {remote_dir} && cd {remote_dir} && tar xzf -"
+            "rm -rf {} && mkdir -p {} && cd {} && tar xzf -",
+            shell_escape(remote_dir),
+            shell_escape(remote_dir),
+            shell_escape(remote_dir),
         );
         let child = process::Command::new("sh")
             .args([
@@ -141,7 +151,7 @@ pub fn deploy(
             println!("  Syncing config to {}:{}...", host.ssh, remote_home);
             ssh_exec(
                 &host.ssh,
-                &format!("mkdir -p {}/config", remote_home),
+                &format!("mkdir -p {}/config", shell_escape(&remote_home)),
             )?;
             // Copy config files via scp
             for file in ["config.toml", "genesis.json", "priv_validator_key.json", "node_key.json"]
@@ -167,7 +177,8 @@ pub fn deploy(
             &host.ssh,
             &format!(
                 "set -o pipefail; cd {} && cargo build --release -p {} 2>&1 | tail -5",
-                remote_src, package
+                shell_escape(remote_src),
+                shell_escape(package),
             ),
         )?;
         println!("  {}", build_output.trim());
@@ -175,13 +186,15 @@ pub fn deploy(
         // 4. Stop any existing node, then start
         println!("  Starting V{}...", vid);
         let bin_path = format!("{}/target/release/{}", remote_src, package);
-        // Use a PID file for targeted stop instead of broad pkill pattern
         let pid_file = format!("/tmp/hotmint-v{}.pid", vid);
+        let esc_pid = shell_escape(&pid_file);
+        let esc_bin = shell_escape(&bin_path);
+        let esc_home = shell_escape(&remote_home);
         ssh_exec(
             &host.ssh,
             &format!(
-                "if [ -f {pid_file} ]; then kill $(cat {pid_file}) 2>/dev/null; sleep 1; fi; \
-                 nohup {bin_path} --home {remote_home} > /tmp/hotmint-v{vid}.log 2>&1 & echo $! > {pid_file}",
+                "if [ -f {esc_pid} ]; then kill $(cat {esc_pid}) 2>/dev/null; sleep 1; fi; \
+                 nohup {esc_bin} --home {esc_home} > /tmp/hotmint-v{vid}.log 2>&1 & echo $! > {esc_pid}",
             ),
         )?;
         println!("  V{}: started on {}", vid, host.ssh);

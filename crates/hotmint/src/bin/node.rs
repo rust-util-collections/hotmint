@@ -1,5 +1,9 @@
 use ruc::*;
 
+use std::fs;
+use std::future;
+use std::path::Path;
+use std::process;
 use std::sync::{Arc, RwLock};
 
 use clap::{Parser, Subcommand};
@@ -87,7 +91,7 @@ async fn main() {
         Command::Init => {
             if let Err(e) = config::init_node_dir(&home) {
                 eprintln!("Error: {e}");
-                std::process::exit(1);
+                process::exit(1);
             }
         }
         Command::Node {
@@ -102,7 +106,7 @@ async fn main() {
 
             if let Err(e) = run_node(&home, proxy_app, p2p_laddr, rpc_laddr).await {
                 eprintln!("Fatal: {e}");
-                std::process::exit(1);
+                process::exit(1);
             }
         }
         Command::GenValidatorKey {
@@ -111,10 +115,10 @@ async fn main() {
         } => {
             let mut key = PrivValidatorKey::generate();
             key.validator_id = validator_id;
-            let path = std::path::Path::new(&output);
+            let path = Path::new(&output);
             if let Err(e) = key.save(path) {
                 eprintln!("Error: {e}");
-                std::process::exit(1);
+                process::exit(1);
             }
             println!("Generated validator key:");
             println!("  Validator ID: {}", key.validator_id);
@@ -123,10 +127,10 @@ async fn main() {
         }
         Command::GenNodeKey { output } => {
             let key = NodeKey::generate();
-            let path = std::path::Path::new(&output);
+            let path = Path::new(&output);
             if let Err(e) = key.save(path) {
                 eprintln!("Error: {e}");
-                std::process::exit(1);
+                process::exit(1);
             }
             println!("Generated node key:");
             println!("  Public key: {}", key.public_key);
@@ -137,7 +141,7 @@ async fn main() {
             println!("  File:       {}", path.display());
         }
         Command::ShowValidator { file } => {
-            let path = std::path::Path::new(&file);
+            let path = Path::new(&file);
             match PrivValidatorKey::load(path) {
                 Ok(key) => {
                     println!("Validator key: {}", path.display());
@@ -150,12 +154,12 @@ async fn main() {
                 }
                 Err(e) => {
                     eprintln!("Error loading {}: {e}", path.display());
-                    std::process::exit(1);
+                    process::exit(1);
                 }
             }
         }
         Command::ShowNodeId { file } => {
-            let path = std::path::Path::new(&file);
+            let path = Path::new(&file);
             match NodeKey::load(path) {
                 Ok(key) => {
                     println!("Node key: {}", path.display());
@@ -167,7 +171,7 @@ async fn main() {
                 }
                 Err(e) => {
                     eprintln!("Error loading {}: {e}", path.display());
-                    std::process::exit(1);
+                    process::exit(1);
                 }
             }
         }
@@ -175,7 +179,7 @@ async fn main() {
 }
 
 async fn run_node(
-    home: &std::path::Path,
+    home: &Path,
     proxy_app_override: Option<String>,
     p2p_laddr_override: Option<String>,
     rpc_laddr_override: Option<String>,
@@ -259,7 +263,7 @@ async fn run_node(
     }
 
     // 5. Set up persistent storage
-    std::fs::create_dir_all(&data_dir).c(d!("create data dir"))?;
+    fs::create_dir_all(&data_dir).c(d!("create data dir"))?;
     vsdb::vsdb_set_base_dir(&data_dir).c(d!("set vsdb base dir"))?;
 
     let store: Arc<RwLock<Box<dyn BlockStore>>> =
@@ -314,7 +318,7 @@ async fn run_node(
         let peer_book_path = home.join("data").join("peer_book.json");
         let peer_book = hotmint::network::peer::PeerBook::load(&peer_book_path)
             .unwrap_or_else(|_| hotmint::network::peer::PeerBook::new(&peer_book_path));
-        let peer_book = std::sync::Arc::new(std::sync::RwLock::new(peer_book));
+        let peer_book = Arc::new(RwLock::new(peer_book));
         NetworkService::create(
             listen_addr,
             peer_map,
@@ -422,7 +426,7 @@ async fn run_node(
         tokio::spawn(async move { rpc_server.run().await })
     } else {
         info!("RPC server disabled by config (serve_rpc = false)");
-        tokio::spawn(std::future::pending())
+        tokio::spawn(future::pending())
     };
 
     let sync_sink = network_sink.clone();
@@ -474,7 +478,7 @@ async fn run_node(
         })
     } else {
         info!("sync responder disabled by config (serve_sync = false)");
-        tokio::spawn(std::future::pending())
+        tokio::spawn(future::pending())
     };
 
     // 14. Sync catch-up before starting consensus (if peers configured)
@@ -649,7 +653,7 @@ async fn run_node(
     } else {
         // No peers configured: spawn a permanently-pending task so the select! arm
         // has a consistent type without needing special-casing.
-        tokio::spawn(std::future::pending())
+        tokio::spawn(future::pending())
     };
 
     // 15. Write back synced state and create consensus engine
@@ -711,28 +715,28 @@ async fn run_node(
                 Ok(()) => error!("network service exited unexpectedly"),
                 Err(e) => error!("network service panicked: {e}"),
             }
-            std::process::exit(1);
+            process::exit(1);
         }
         res = rpc_handle => {
             match res {
                 Ok(()) => error!("RPC server exited unexpectedly"),
                 Err(e) => error!("RPC server panicked: {e}"),
             }
-            std::process::exit(1);
+            process::exit(1);
         }
         res = sync_responder_handle => {
             match res {
                 Ok(()) => error!("sync responder exited unexpectedly"),
                 Err(e) => error!("sync responder panicked: {e}"),
             }
-            std::process::exit(1);
+            process::exit(1);
         }
         res = reconnect_watcher_handle => {
             match res {
                 Ok(()) => error!("reconnect watcher exited unexpectedly"),
                 Err(e) => error!("reconnect watcher panicked: {e}"),
             }
-            std::process::exit(1);
+            process::exit(1);
         }
     }
 

@@ -1,5 +1,7 @@
 use ruc::*;
 
+use std::io;
+use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 
 use crate::types::{
@@ -82,7 +84,7 @@ impl RpcServer {
         })
     }
 
-    pub fn local_addr(&self) -> std::net::SocketAddr {
+    pub fn local_addr(&self) -> SocketAddr {
         self.listener.local_addr().expect("listener has local addr")
     }
 
@@ -294,7 +296,7 @@ fn hex_to_block_hash(s: &str) -> Option<BlockHash> {
 async fn read_line_limited<R: AsyncBufReadExt + Unpin>(
     reader: &mut R,
     max_bytes: usize,
-) -> std::io::Result<Option<String>> {
+) -> io::Result<Option<String>> {
     let mut buf = Vec::new();
     loop {
         let available = reader.fill_buf().await?;
@@ -314,8 +316,8 @@ async fn read_line_limited<R: AsyncBufReadExt + Unpin>(
         buf.extend_from_slice(available);
         reader.consume(to_consume);
         if buf.len() > max_bytes {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
                 "line too long",
             ));
         }

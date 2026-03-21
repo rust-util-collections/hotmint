@@ -1,5 +1,7 @@
 //! Local multi-node cluster management: start, stop, status.
 
+use std::env;
+use std::fs;
 use std::io::{Read as _, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
@@ -36,8 +38,8 @@ fn find_binary(binary: Option<&Path>) -> Result<PathBuf> {
 }
 
 fn which(cmd: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths).find_map(|dir| {
+    env::var_os("PATH").and_then(|paths| {
+        env::split_paths(&paths).find_map(|dir| {
             let full = dir.join(cmd);
             if full.is_file() { Some(full) } else { None }
         })
@@ -47,15 +49,23 @@ fn which(cmd: &str) -> Option<PathBuf> {
 /// Read PID from a pid file.
 fn read_pid(base_dir: &Path, id: u64) -> Option<u32> {
     let pid_file = base_dir.join(format!("v{}.pid", id));
-    std::fs::read_to_string(&pid_file)
+    fs::read_to_string(&pid_file)
         .ok()
         .and_then(|s| s.trim().parse().ok())
 }
 
-/// Write PID to a pid file.
+/// Write PID to a pid file.  Logs a warning on failure instead of silently
+/// discarding the error — the node is already running so we don't abort, but
+/// the operator needs to know the pid file is missing (stop/status will break).
 fn write_pid(base_dir: &Path, id: u64, pid: u32) {
     let pid_file = base_dir.join(format!("v{}.pid", id));
-    let _ = std::fs::write(&pid_file, pid.to_string());
+    if let Err(e) = fs::write(&pid_file, pid.to_string()) {
+        eprintln!(
+            "WARNING: failed to write pid file {}: {} — manual cleanup may be needed",
+            pid_file.display(),
+            e
+        );
+    }
 }
 
 /// Check if a process is running.
@@ -108,7 +118,7 @@ pub fn start(base_dir: &Path, node: Option<u32>, binary: Option<&Path>) -> Resul
             }
 
         let log_file = base_dir.join(format!("v{}.log", v.id));
-        let log = std::fs::File::create(&log_file).c(d!("create log file"))?;
+        let log = fs::File::create(&log_file).c(d!("create log file"))?;
         let log_err = log.try_clone().c(d!("clone log file"))?;
 
         let child = process::Command::new(&bin)
@@ -161,7 +171,7 @@ pub fn stop(base_dir: &Path, node: Option<u32>) -> Result<()> {
             }
             // Clean up pid file
             let pid_file = base_dir.join(format!("v{}.pid", v.id));
-            let _ = std::fs::remove_file(&pid_file);
+            let _ = fs::remove_file(&pid_file);
         } else {
             println!("V{}: not running (no pid file)", v.id);
         }

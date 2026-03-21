@@ -1,7 +1,8 @@
 //! Cluster initialization, configuration, and lifecycle management.
 
 use ruc::*;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
@@ -32,14 +33,14 @@ pub struct ValidatorEntry {
 impl ClusterState {
     pub fn load(base_dir: &Path) -> Result<Self> {
         let path = base_dir.join("cluster.json");
-        let contents = std::fs::read_to_string(&path).c(d!("read cluster.json"))?;
+        let contents = fs::read_to_string(&path).c(d!("read cluster.json"))?;
         serde_json::from_str(&contents).c(d!("parse cluster.json"))
     }
 
     pub fn save(&self, base_dir: &Path) -> Result<()> {
         let path = base_dir.join("cluster.json");
         let contents = serde_json::to_string_pretty(self).c(d!("serialize cluster.json"))?;
-        std::fs::write(&path, contents).c(d!("write cluster.json"))
+        fs::write(&path, contents).c(d!("write cluster.json"))
     }
 }
 
@@ -135,7 +136,7 @@ pub fn init_cluster(
             base_dir.display()
         ));
     }
-    std::fs::create_dir_all(base_dir).c(d!("create base dir"))?;
+    fs::create_dir_all(base_dir).c(d!("create base dir"))?;
 
     println!(
         "Initializing cluster: {} validators, chain_id={}, base_dir={}",
@@ -188,7 +189,7 @@ pub fn init_cluster(
     for (id, _sk, pk_hex, sk_hex) in &keys {
         let home = base_dir.join(format!("v{}", id));
         let config_dir = home.join("config");
-        std::fs::create_dir_all(&config_dir).c(d!("create v{} config dir", id))?;
+        fs::create_dir_all(&config_dir).c(d!("create v{} config dir", id))?;
 
         // Write validator key
         let priv_key = PrivValidatorKey {
@@ -197,7 +198,7 @@ pub fn init_cluster(
             private_key: sk_hex.clone(),
         };
         let key_json = serde_json::to_string_pretty(&priv_key).c(d!("serialize key"))?;
-        std::fs::write(config_dir.join("priv_validator_key.json"), &key_json)
+        fs::write(config_dir.join("priv_validator_key.json"), &key_json)
             .c(d!("write key"))?;
 
         // Node key is the same as validator key for hotmint (PeerId = validator pubkey)
@@ -206,11 +207,11 @@ pub fn init_cluster(
             private_key: sk_hex.clone(),
         };
         let node_key_json = serde_json::to_string_pretty(&node_key).c(d!("serialize node key"))?;
-        std::fs::write(config_dir.join("node_key.json"), &node_key_json)
+        fs::write(config_dir.join("node_key.json"), &node_key_json)
             .c(d!("write node key"))?;
 
         // Write genesis
-        std::fs::write(config_dir.join("genesis.json"), &genesis_json)
+        fs::write(config_dir.join("genesis.json"), &genesis_json)
             .c(d!("write genesis"))?;
 
         // Build config with peers (excluding self)
@@ -222,7 +223,7 @@ pub fn init_cluster(
         let p2p_port = p2p_base_port + *id as u16;
         let rpc_port = rpc_base_port + *id as u16;
         let config = generate_config(p2p_port, rpc_port, &peers_without_self, bind_ip);
-        std::fs::write(config_dir.join("config.toml"), &config).c(d!("write config"))?;
+        fs::write(config_dir.join("config.toml"), &config).c(d!("write config"))?;
 
         // Compute PeerId for display
         let peer_id = format!("(V{}: {}...)", id, &pk_hex[..16]);
@@ -269,9 +270,9 @@ pub fn init_cluster(
 pub fn clean(base_dir: &Path) -> Result<()> {
     let state = ClusterState::load(base_dir)?;
     for v in &state.validators {
-        let data_dir = std::path::PathBuf::from(&v.home_dir).join("data");
+        let data_dir = PathBuf::from(&v.home_dir).join("data");
         if data_dir.exists() {
-            std::fs::remove_dir_all(&data_dir).c(d!("remove data dir for V{}", v.id))?;
+            fs::remove_dir_all(&data_dir).c(d!("remove data dir for V{}", v.id))?;
             println!("V{}: cleaned {}", v.id, data_dir.display());
         }
     }
@@ -286,7 +287,7 @@ pub fn destroy(base_dir: &Path) -> Result<()> {
         println!("Nothing to destroy at {}", base_dir.display());
         return Ok(());
     }
-    std::fs::remove_dir_all(base_dir).c(d!("remove base dir"))?;
+    fs::remove_dir_all(base_dir).c(d!("remove base dir"))?;
     println!("Cluster destroyed: {}", base_dir.display());
     Ok(())
 }

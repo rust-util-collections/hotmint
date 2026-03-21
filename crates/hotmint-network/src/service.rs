@@ -1,7 +1,9 @@
 use ruc::*;
 
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::collections::{HashMap, HashSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::iter;
+use std::mem;
 
 use futures::StreamExt;
 use hotmint_consensus::network::NetworkSink;
@@ -131,7 +133,7 @@ pub struct NetworkService {
     relay_consensus: bool,
     /// Public keys of known validators, used to verify individual message signatures
     /// before relaying.  Updated on epoch transitions via [`NetCommand::EpochChange`].
-    validator_keys: std::collections::HashMap<ValidatorId, hotmint_types::crypto::PublicKey>,
+    validator_keys: HashMap<ValidatorId, hotmint_types::crypto::PublicKey>,
     /// Validators in round-robin order for leader-for-view computation.
     /// Must match the ordering in `ValidatorSet::validators()`.
     validator_ids_ordered: Vec<ValidatorId>,
@@ -142,16 +144,16 @@ pub struct NetworkService {
     peer_info_tx: watch::Sender<Vec<PeerStatus>>,
     connected_count_tx: watch::Sender<usize>,
     /// Tracks peers with an open notification substream (post-handshake).
-    notif_connected_peers: std::collections::HashSet<PeerId>,
+    notif_connected_peers: HashSet<PeerId>,
     notif_connected_count_tx: watch::Sender<usize>,
-    connected_peers: std::collections::HashSet<PeerId>,
+    connected_peers: HashSet<PeerId>,
     /// Two-set rotation for relay deduplication: when the active set fills up,
     /// swap it to the backup position (clearing the old backup). Messages are
     /// checked against both sets, so recent history is always preserved across
     /// rotations. This avoids the brief relay-window that a single-set clear
     /// would create.
-    seen_active: std::collections::HashSet<u64>,
-    seen_backup: std::collections::HashSet<u64>,
+    seen_active: HashSet<u64>,
+    seen_backup: HashSet<u64>,
 }
 
 impl NetworkService {
@@ -252,7 +254,7 @@ impl NetworkService {
 
         let validator_ids_ordered: Vec<ValidatorId> =
             initial_validators.iter().map(|(vid, _)| *vid).collect();
-        let validator_keys: std::collections::HashMap<ValidatorId, hotmint_types::crypto::PublicKey> =
+        let validator_keys: HashMap<ValidatorId, hotmint_types::crypto::PublicKey> =
             initial_validators.into_iter().collect();
 
         Ok(NetworkServiceHandles {
@@ -276,11 +278,11 @@ impl NetworkService {
                 sync_resp_tx,
                 peer_info_tx,
                 connected_count_tx,
-                notif_connected_peers: std::collections::HashSet::new(),
+                notif_connected_peers: HashSet::new(),
                 notif_connected_count_tx,
-                connected_peers: std::collections::HashSet::new(),
-                seen_active: std::collections::HashSet::new(),
-                seen_backup: std::collections::HashSet::new(),
+                connected_peers: HashSet::new(),
+                seen_active: HashSet::new(),
+                seen_backup: HashSet::new(),
             },
             sink,
             msg_rx,
@@ -299,7 +301,7 @@ impl NetworkService {
     /// Run the network event loop
     pub async fn run(mut self) {
         // Dial all persistent peers at startup using full multiaddrs.
-        for addr in std::mem::take(&mut self.initial_dial_addresses) {
+        for addr in mem::take(&mut self.initial_dial_addresses) {
             if let Err(e) = self.litep2p.dial_address(addr.clone()).await {
                 debug!(address = %addr, error = ?e, "initial dial failed (will retry)");
             }
@@ -399,7 +401,7 @@ impl NetworkService {
                                 &self.validator_ids_ordered,
                             )
                         {
-                            let mut hasher = std::hash::DefaultHasher::new();
+                            let mut hasher = DefaultHasher::new();
                             notification.hash(&mut hasher);
                             let msg_hash = hasher.finish();
 
@@ -418,7 +420,7 @@ impl NetworkService {
                                 }
                                 // Rotate: move active→backup, clear old backup
                                 if self.seen_active.len() > 10_000 {
-                                    self.seen_backup = std::mem::take(&mut self.seen_active);
+                                    self.seen_backup = mem::take(&mut self.seen_active);
                                 }
                             }
                         }
@@ -708,7 +710,7 @@ impl NetworkService {
                 // Open notification substream to this peer for consensus messages.
                 if let Err(e) = self
                     .notif_handle
-                    .try_open_substream_batch(std::iter::once(peer))
+                    .try_open_substream_batch(iter::once(peer))
                 {
                     debug!(peer = %peer, error = ?e, "failed to open notification substream");
                 }
@@ -806,7 +808,7 @@ impl NetworkService {
                     }
                 }
                 // Remove validators no longer in the set
-                let new_ids: std::collections::HashSet<ValidatorId> =
+                let new_ids: HashSet<ValidatorId> =
                     validators.iter().map(|(vid, _)| *vid).collect();
                 let to_remove: Vec<ValidatorId> = self
                     .peer_map
@@ -849,40 +851,54 @@ impl Litep2pNetworkSink {
     }
 
     pub fn send_sync_request(&self, peer_id: PeerId, request: &SyncRequest) {
-        if let Ok(bytes) = codec::encode(request)
-            && let Err(e) = self
-                .cmd_tx
-                .try_send(NetCommand::SyncRequest(peer_id, bytes))
-        {
-            warn!("sync request cmd dropped: {e}");
+        match codec::encode(request) {
+            Ok(bytes) => {
+                if let Err(e) = self
+                    .cmd_tx
+                    .try_send(NetCommand::SyncRequest(peer_id, bytes))
+                {
+                    warn!("sync request cmd dropped: {e}");
+                }
+            }
+            Err(e) => warn!("sync request encode failed: {e}"),
         }
     }
 
     pub fn send_sync_response(&self, request_id: RequestId, response: &SyncResponse) {
-        if let Ok(bytes) = codec::encode(response)
-            && let Err(e) = self
-                .cmd_tx
-                .try_send(NetCommand::SyncRespond(request_id, bytes))
-        {
-            warn!("sync response cmd dropped: {e}");
+        match codec::encode(response) {
+            Ok(bytes) => {
+                if let Err(e) = self
+                    .cmd_tx
+                    .try_send(NetCommand::SyncRespond(request_id, bytes))
+                {
+                    warn!("sync response cmd dropped: {e}");
+                }
+            }
+            Err(e) => warn!("sync response encode failed: {e}"),
         }
     }
 }
 
 impl NetworkSink for Litep2pNetworkSink {
     fn broadcast(&self, msg: ConsensusMessage) {
-        if let Ok(bytes) = codec::encode(&msg)
-            && let Err(e) = self.cmd_tx.try_send(NetCommand::Broadcast(bytes))
-        {
-            warn!("broadcast cmd dropped: {e}");
+        match codec::encode(&msg) {
+            Ok(bytes) => {
+                if let Err(e) = self.cmd_tx.try_send(NetCommand::Broadcast(bytes)) {
+                    warn!("broadcast cmd dropped: {e}");
+                }
+            }
+            Err(e) => warn!("broadcast encode failed: {e}"),
         }
     }
 
     fn send_to(&self, target: ValidatorId, msg: ConsensusMessage) {
-        if let Ok(bytes) = codec::encode(&msg)
-            && let Err(e) = self.cmd_tx.try_send(NetCommand::SendTo(target, bytes))
-        {
-            warn!("send_to cmd dropped for {target}: {e}");
+        match codec::encode(&msg) {
+            Ok(bytes) => {
+                if let Err(e) = self.cmd_tx.try_send(NetCommand::SendTo(target, bytes)) {
+                    warn!("send_to cmd dropped for {target}: {e}");
+                }
+            }
+            Err(e) => warn!("send_to encode failed for {target}: {e}"),
         }
     }
 

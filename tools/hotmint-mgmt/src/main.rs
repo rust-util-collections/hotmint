@@ -16,6 +16,7 @@ mod remote;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use std::process;
 
 #[derive(Parser)]
 #[command(
@@ -121,6 +122,6 @@ fn main() {
 
     if let Err(e) = result {
         eprintln!("Error: {e}");
-        std::process::exit(1);
+        process::exit(1);
     }
 }

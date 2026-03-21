@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -77,7 +78,7 @@ impl PeerBook {
         if !p.exists() {
             return Ok(Self::new(p));
         }
-        let contents = std::fs::read_to_string(p).c(d!("read peer book"))?;
+        let contents = fs::read_to_string(p).c(d!("read peer book"))?;
         let peers: HashMap<String, PeerInfo> =
             serde_json::from_str(&contents).c(d!("parse peer book"))?;
         Ok(Self {
@@ -88,7 +89,7 @@ impl PeerBook {
 
     pub fn save(&self) -> Result<()> {
         let contents = serde_json::to_string_pretty(&self.peers).c(d!("serialize peer book"))?;
-        std::fs::write(&self.path, contents).c(d!("write peer book"))
+        fs::write(&self.path, contents).c(d!("write peer book"))
     }
 
     pub fn add_peer(&mut self, info: PeerInfo) {

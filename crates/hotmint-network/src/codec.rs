@@ -10,7 +10,9 @@
 //! This is part of the hotmint wire protocol — all node implementations
 //! (regardless of P2P library) must support this format.
 
-use std::io::Read;
+use std::error::Error;
+use std::fmt;
+use std::io::{self, Read};
 
 use serde::{Deserialize, Serialize};
 
@@ -78,8 +80,8 @@ pub enum DecodeError {
     DecompressedTooLarge,
 }
 
-impl std::fmt::Display for DecodeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EmptyFrame => write!(f, "empty frame"),
             Self::UnknownTag(tag) => write!(f, "unknown codec tag: 0x{tag:02x}"),
@@ -94,16 +96,16 @@ impl std::fmt::Display for DecodeError {
     }
 }
 
-impl std::error::Error for DecodeError {}
+impl Error for DecodeError {}
 
 #[derive(Debug)]
 pub enum EncodeError {
     Cbor(serde_cbor_2::Error),
-    Zstd(std::io::Error),
+    Zstd(io::Error),
 }
 
-impl std::fmt::Display for EncodeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for EncodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Cbor(e) => write!(f, "cbor: {e}"),
             Self::Zstd(e) => write!(f, "zstd: {e}"),
@@ -111,7 +113,7 @@ impl std::fmt::Display for EncodeError {
     }
 }
 
-impl std::error::Error for EncodeError {}
+impl Error for EncodeError {}
 
 #[cfg(test)]
 mod tests {

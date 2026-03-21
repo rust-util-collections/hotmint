@@ -1,3 +1,5 @@
+use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use ed25519_dalek::SigningKey;
@@ -114,13 +116,13 @@ impl Default for NodeConfig {
 
 impl NodeConfig {
     pub fn load(path: &Path) -> Result<Self> {
-        let contents = std::fs::read_to_string(path).c(d!("read config.toml"))?;
+        let contents = fs::read_to_string(path).c(d!("read config.toml"))?;
         toml::from_str(&contents).c(d!("parse config.toml"))
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
         let contents = toml::to_string_pretty(self).c(d!("serialize config.toml"))?;
-        std::fs::write(path, contents).c(d!("write config.toml"))
+        fs::write(path, contents).c(d!("write config.toml"))
     }
 }
 
@@ -142,13 +144,13 @@ pub struct GenesisValidator {
 
 impl GenesisDoc {
     pub fn load(path: &Path) -> Result<Self> {
-        let contents = std::fs::read_to_string(path).c(d!("read genesis.json"))?;
+        let contents = fs::read_to_string(path).c(d!("read genesis.json"))?;
         serde_json::from_str(&contents).c(d!("parse genesis.json"))
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
         let contents = serde_json::to_string_pretty(self).c(d!("serialize genesis.json"))?;
-        std::fs::write(path, contents).c(d!("write genesis.json"))
+        fs::write(path, contents).c(d!("write genesis.json"))
     }
 
     /// Build a `ValidatorSet` from the genesis validators.
@@ -194,14 +196,14 @@ impl PrivValidatorKey {
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let contents = std::fs::read_to_string(path).c(d!("read priv_validator_key.json"))?;
+        let contents = fs::read_to_string(path).c(d!("read priv_validator_key.json"))?;
         serde_json::from_str(&contents).c(d!("parse priv_validator_key.json"))
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
         let contents =
             serde_json::to_string_pretty(self).c(d!("serialize priv_validator_key.json"))?;
-        std::fs::write(path, contents).c(d!("write priv_validator_key.json"))
+        fs::write(path, contents).c(d!("write priv_validator_key.json"))
     }
 
     pub fn to_signing_key(&self) -> Result<SigningKey> {
@@ -269,13 +271,13 @@ impl NodeKey {
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let contents = std::fs::read_to_string(path).c(d!("read node_key.json"))?;
+        let contents = fs::read_to_string(path).c(d!("read node_key.json"))?;
         serde_json::from_str(&contents).c(d!("parse node_key.json"))
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
         let contents = serde_json::to_string_pretty(self).c(d!("serialize node_key.json"))?;
-        std::fs::write(path, contents).c(d!("write node_key.json"))
+        fs::write(path, contents).c(d!("write node_key.json"))
     }
 
     /// Convert to a litep2p Ed25519 keypair for P2P networking.
@@ -295,7 +297,7 @@ pub fn resolve_home(cli_home: Option<&str>) -> PathBuf {
     if let Some(h) = cli_home {
         return PathBuf::from(h);
     }
-    if let Ok(h) = std::env::var("HOTMINT_HOME") {
+    if let Ok(h) = env::var("HOTMINT_HOME") {
         return PathBuf::from(h);
     }
     dirs::home_dir()
@@ -309,8 +311,8 @@ pub fn init_node_dir(home: &Path) -> Result<()> {
     let config_dir = home.join("config");
     let data_dir = home.join("data");
 
-    std::fs::create_dir_all(&config_dir).c(d!("create config dir"))?;
-    std::fs::create_dir_all(&data_dir).c(d!("create data dir"))?;
+    fs::create_dir_all(&config_dir).c(d!("create config dir"))?;
+    fs::create_dir_all(&data_dir).c(d!("create data dir"))?;
 
     // Generate validator key
     let priv_key = PrivValidatorKey::generate();

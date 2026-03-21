@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use hotmint_types::{ConsensusMessage, ValidatorId, ValidatorSet};
 
 pub trait NetworkSink: Send + Sync {
@@ -39,8 +41,6 @@ impl ChannelNetwork {
         ChannelNetwork,
         tokio::sync::mpsc::Receiver<(Option<ValidatorId>, ConsensusMessage)>,
     )> {
-        use std::collections::HashMap;
-
         let mut senders: HashMap<
             ValidatorId,
             tokio::sync::mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>,

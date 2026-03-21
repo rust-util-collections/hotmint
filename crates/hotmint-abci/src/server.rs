@@ -1,3 +1,5 @@
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use tokio::net::UnixListener;
@@ -71,9 +73,9 @@ impl<H: ApplicationHandler + 'static> IpcApplicationServer<H> {
     /// This handles one connection at a time (matching the single-threaded
     /// consensus engine model). The server runs until the listener is dropped
     /// or the task is cancelled.
-    pub async fn run(&self) -> std::io::Result<()> {
+    pub async fn run(&self) -> io::Result<()> {
         // Remove stale socket file if present.
-        let _ = std::fs::remove_file(&self.socket_path);
+        let _ = fs::remove_file(&self.socket_path);
         let listener = UnixListener::bind(&self.socket_path)?;
         tracing::info!(path = %self.socket_path.display(), "IPC server listening");
 
@@ -84,7 +86,7 @@ impl<H: ApplicationHandler + 'static> IpcApplicationServer<H> {
             loop {
                 let frame = match protocol::read_frame(&mut stream).await {
                     Ok(f) => f,
-                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
                         tracing::debug!("IPC client disconnected");
                         break;
                     }

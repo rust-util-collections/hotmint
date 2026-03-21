@@ -1,5 +1,7 @@
 use ruc::*;
 
+use std::cmp;
+
 use hotmint_types::crypto::PublicKey;
 use hotmint_types::validator::{ValidatorId, ValidatorSet};
 use hotmint_types::validator_update::ValidatorUpdate;
@@ -360,7 +362,7 @@ impl<S: StakingStore> StakingManager<S> {
             .filter_map(|id| self.store.get_validator(id))
             .filter(|vs| !vs.jailed && vs.self_stake >= self.config.min_self_stake)
             .collect();
-        active.sort_by_key(|v| std::cmp::Reverse(v.voting_power()));
+        active.sort_by_key(|v| cmp::Reverse(v.voting_power()));
         active.truncate(self.config.max_validators);
         active
     }

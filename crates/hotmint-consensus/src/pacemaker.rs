@@ -1,3 +1,4 @@
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -175,7 +176,6 @@ impl Pacemaker {
 
     /// Check if we should relay a received TC (returns true if not yet relayed)
     pub fn should_relay_tc(&mut self, tc: &TimeoutCertificate) -> bool {
-        use std::collections::hash_map::Entry;
         match self.relayed_tcs.entry(tc.view) {
             Entry::Vacant(e) => {
                 e.insert(true);

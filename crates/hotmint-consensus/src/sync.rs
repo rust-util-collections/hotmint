@@ -1,6 +1,8 @@
 //! Block sync: allows a node that is behind to catch up by requesting
 //! missing blocks from peers and replaying the commit lifecycle.
 
+use std::cmp;
+
 use ruc::*;
 
 use crate::application::Application;
@@ -67,7 +69,7 @@ pub async fn sync_to_tip(
     // Batch sync loop
     loop {
         let from = Height(last_committed_height.as_u64() + 1);
-        let to = Height(std::cmp::min(
+        let to = Height(cmp::min(
             from.as_u64() + MAX_SYNC_BATCH - 1,
             peer_status.as_u64(),
         ));

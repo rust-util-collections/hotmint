@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use tokio::sync::Mutex;
 use tracing::debug;
 
@@ -8,7 +8,7 @@ pub type TxHash = [u8; 32];
 /// Simple mempool: FIFO queue with deduplication
 pub struct Mempool {
     txs: Mutex<VecDeque<Vec<u8>>>,
-    seen: Mutex<std::collections::HashSet<TxHash>>,
+    seen: Mutex<HashSet<TxHash>>,
     max_size: usize,
     max_tx_bytes: usize,
 }
@@ -17,7 +17,7 @@ impl Mempool {
     pub fn new(max_size: usize, max_tx_bytes: usize) -> Self {
         Self {
             txs: Mutex::new(VecDeque::new()),
-            seen: Mutex::new(std::collections::HashSet::new()),
+            seen: Mutex::new(HashSet::new()),
             max_size,
             max_tx_bytes,
         }

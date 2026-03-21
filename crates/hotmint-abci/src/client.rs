@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -56,21 +56,21 @@ impl IpcApplicationClient {
     }
 }
 
-fn write_frame_sync(w: &mut impl Write, payload: &[u8]) -> std::io::Result<()> {
+fn write_frame_sync(w: &mut impl Write, payload: &[u8]) -> io::Result<()> {
     let len = payload.len() as u32;
     w.write_all(&len.to_le_bytes())?;
     w.write_all(payload)?;
     w.flush()
 }
 
-fn read_frame_sync(r: &mut impl Read) -> std::io::Result<Vec<u8>> {
+fn read_frame_sync(r: &mut impl Read) -> io::Result<Vec<u8>> {
     const MAX_FRAME: usize = 64 * 1024 * 1024;
     let mut len_buf = [0u8; 4];
     r.read_exact(&mut len_buf)?;
     let len = u32::from_le_bytes(len_buf) as usize;
     if len > MAX_FRAME {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
             format!("frame size {len} exceeds max {MAX_FRAME}"),
         ));
     }
