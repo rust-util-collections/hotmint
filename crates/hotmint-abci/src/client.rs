@@ -103,9 +103,10 @@ impl Application for IpcApplicationClient {
         match self.call(&req) {
             Ok(Response::ValidateBlock(ok)) => ok,
             Ok(other) => {
-                // Unexpected response variant: reject the block so the view times out
-                // and the leader can re-propose. The node stays live and can recover
-                // once the ABCI process sends correct responses again.
+                // Unexpected response variant indicates a protocol framing error.
+                // Reset the connection so the next call reconnects and re-syncs the
+                // framing, then reject the block so the view times out and recovers.
+                *self.conn.lock().unwrap_or_else(|p| p.into_inner()) = None;
                 tracing::error!(?other, "IPC_FAULT: unexpected response for validate_block — rejecting block");
                 false
             }
