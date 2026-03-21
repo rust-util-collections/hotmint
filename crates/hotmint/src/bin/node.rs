@@ -8,7 +8,7 @@ use tracing::{Level, error, info};
 
 use hotmint::abci::client::IpcApplicationClient;
 use hotmint::api::rpc::ConsensusStatus;
-use hotmint::config::{self, GenesisDoc, NodeConfig, NodeKey, PrivValidatorKey};
+use hotmint::config::{self, GenesisDoc, NodeConfig, NodeKey, NodeMode, PrivValidatorKey};
 use hotmint::consensus::application::{Application, NoopApplication};
 use hotmint::consensus::engine::{ConsensusEngine, EngineConfig};
 use hotmint::consensus::pacemaker::PacemakerConfig;
@@ -224,7 +224,7 @@ async fn run_node(
         .iter()
         .find(|v| &v.public_key == our_pk_hex)
     {
-        is_fullnode = config.node.mode == config::NodeMode::Fullnode;
+        is_fullnode = config.node.mode == NodeMode::Fullnode;
         ValidatorId(gv.id)
     } else {
         is_fullnode = true;
@@ -325,9 +325,9 @@ async fn run_node(
     };
 
     // 8. Create application (ABCI client or embedded noop)
-    // Use ABCI only when proxy_app is explicitly configured; otherwise fall back to
-    // the embedded no-op application. This allows both validators and fullnodes to run
-    // without an ABCI backend when no proxy_app is set (useful for testing / fullnodes).
+    // Validators MUST have proxy_app configured — running without an ABCI backend
+    // silently disables application-layer block validation, which is a misconfiguration
+    // in production. Fullnodes may legitimately run with the embedded no-op application.
     let use_abci = !config.proxy_app.is_empty();
     let (app_box, sync_app_box): (Box<dyn Application>, Box<dyn Application>) = if use_abci {
         let proxy_path = config
@@ -342,6 +342,13 @@ async fn run_node(
         let ipc_client_for_sync = IpcApplicationClient::new(proxy_path);
         (Box::new(ipc_client), Box::new(ipc_client_for_sync))
     } else {
+        if config.node.mode == NodeMode::Validator {
+            return Err(eg!(
+                "validator mode requires proxy_app to be configured — \
+                 set proxy_app = \"unix:///path/to/app.sock\" in config.toml, \
+                 or switch to mode = \"fullnode\" to run without an ABCI backend"
+            ));
+        }
         info!("fullnode mode: using embedded no-op application");
         (
             Box::new(hotmint::consensus::application::NoopApplication),
