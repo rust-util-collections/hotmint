@@ -2,13 +2,22 @@
 //!
 //! Supports both local multi-node development and distributed deployment.
 //!
-//! Usage:
+//! Local cluster commands:
 //!   hotmint-mgmt init --validators 4                  # Generate cluster config
 //!   hotmint-mgmt start                                # Start all nodes
 //!   hotmint-mgmt stop                                 # Stop all nodes
 //!   hotmint-mgmt status                               # Show cluster status
 //!   hotmint-mgmt clean                                # Clean data dirs
-//!   hotmint-mgmt deploy --hosts hosts.toml            # Deploy to remote machines
+//!   hotmint-mgmt destroy                              # Remove everything
+//!   hotmint-mgmt info                                 # Show node keys and peer IDs
+//!
+//! Remote deployment (git-based sync via SSH):
+//!   hotmint-mgmt deploy --hosts hosts.toml [--repo URL] [--branch BRANCH]
+//!   hotmint-mgmt exec --hosts hosts.toml -- CMD...    # Run command on all hosts
+//!   hotmint-mgmt push --hosts hosts.toml --local F --remote P  # Push file to hosts
+//!   hotmint-mgmt pull --hosts hosts.toml --remote P   # Pull file from hosts
+//!   hotmint-mgmt logs --hosts hosts.toml [--lines N] [--grep PAT]  # Collect logs
+//!   hotmint-mgmt remote-status --hosts hosts.toml     # Show remote node status
 
 mod cluster;
 mod local;

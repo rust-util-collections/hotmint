@@ -145,22 +145,24 @@ The two indexes work together:
 ### Using with ConsensusEngine
 
 ```rust
-use std::sync::{Arc, RwLock};
-use hotmint::consensus::engine::SharedBlockStore;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use hotmint::consensus::engine::{ConsensusEngineBuilder, SharedBlockStore};
 use hotmint::crypto::Ed25519Verifier;
 
 let store: SharedBlockStore =
     Arc::new(RwLock::new(Box::new(VsdbBlockStore::new())));
 
-let engine = ConsensusEngine::builder()
+let engine = ConsensusEngineBuilder::new()
     .state(state)
-    .block_store(store)        // SharedBlockStore = Arc<RwLock<Box<dyn BlockStore>>>
-    .network_sink(network_sink)
-    .application(app)
-    .signer(signer)
-    .message_receiver(msg_rx)
-    .verifier(Ed25519Verifier)
-    .build();
+    .store(store)                           // SharedBlockStore = Arc<RwLock<Box<dyn BlockStore>>>
+    .network(Box::new(network_sink))        // Box<dyn NetworkSink>
+    .app(Box::new(app))                     // Box<dyn Application>
+    .signer(Box::new(signer))              // Box<dyn Signer>
+    .messages(msg_rx)                       // Receiver<(Option<ValidatorId>, ConsensusMessage)>
+    .verifier(Box::new(Ed25519Verifier))   // Box<dyn Verifier>
+    .build()
+    .expect("all required fields must be set");
 ```
 
 ## PersistentConsensusState

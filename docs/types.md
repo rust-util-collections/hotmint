@@ -120,6 +120,37 @@ pub enum VoteType {
 }
 ```
 
+### Signing Bytes
+
+`Vote::signing_bytes` constructs the canonical byte sequence that is signed by each voter:
+
+```rust
+pub fn signing_bytes(
+    chain_id_hash: &[u8; 32],
+    view: ViewNumber,
+    block_hash: &BlockHash,
+    vote_type: VoteType,
+) -> Vec<u8>
+```
+
+The layout is: `domain_tag || chain_id_hash || view (8 bytes LE) || block_hash (32 bytes) || vote_type (1 byte)`.
+
+The `chain_id_hash` (a 32-byte Blake3 hash of the chain ID string) and the domain tag together prevent cross-chain and cross-message-type signature replay attacks.
+
+### Domain Separator Tags
+
+Each signed message type uses a unique null-terminated domain tag prefix:
+
+| Message | Tag |
+|:--------|:----|
+| Vote / Vote2 | `HOTMINT_VOTE_V1\0` |
+| Proposal | `HOTMINT_PROPOSAL_V1\0` |
+| Prepare | `HOTMINT_PREPARE_V1\0` |
+| Wish (timeout) | `HOTMINT_WISH_V1\0` |
+| StatusCert | `HOTMINT_STATUS_V1\0` |
+
+All signing byte layouts follow the same pattern: `tag || chain_id_hash || message-specific fields`.
+
 ## Validators
 
 ### ValidatorId

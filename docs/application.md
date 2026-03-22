@@ -13,6 +13,7 @@ pub trait Application: Send + Sync {
     fn on_commit(&self, _block: &Block, _ctx: &BlockContext) -> Result<()> { Ok(()) }
     fn on_evidence(&self, _proof: &EquivocationProof) -> Result<()>    { Ok(()) }
     fn query(&self, _path: &str, _data: &[u8]) -> Result<Vec<u8>>     { Ok(vec![]) }
+    fn tracks_app_hash(&self) -> bool                                   { true }
 }
 ```
 
@@ -156,6 +157,18 @@ fn query(&self, path: &str, data: &[u8]) -> Result<Vec<u8>> {
         }
         _ => Err(eg!("unknown query: {path}")),
     }
+}
+```
+
+### `tracks_app_hash() -> bool`
+
+Returns whether this application produces and verifies `app_hash` state roots. Defaults to `true`.
+
+Applications that do not maintain a deterministic state root (e.g. `NoopApplication` used by fullnodes without an ABCI backend) should return `false`. When `false`, sync bypasses the `app_hash` equality check and accepts the chain's authoritative value, allowing the node to follow a chain produced by peers running a real application.
+
+```rust
+fn tracks_app_hash(&self) -> bool {
+    true // override to false for stateless / observer nodes
 }
 ```
 
@@ -328,12 +341,16 @@ impl Application for KvStoreApp {
 
 ## NoopApplication
 
-For testing or when you don't need application logic. Since all `Application` methods now have default no-op implementations, `NoopApplication` requires no method overrides:
+For testing or when you don't need application logic. `NoopApplication` overrides `tracks_app_hash` to return `false` so that fullnodes without a real application backend can sync without failing the `app_hash` check:
 
 ```rust
 pub struct NoopApplication;
 
-impl Application for NoopApplication {}
+impl Application for NoopApplication {
+    fn tracks_app_hash(&self) -> bool {
+        false
+    }
+}
 ```
 
 Usage:

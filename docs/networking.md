@@ -57,7 +57,7 @@ let removed_peer: Option<PeerId> = peer_map.remove(ValidatorId(2));
 ### Creating the Service
 
 ```rust
-use hotmint::network::service::{NetworkService, NetworkServiceHandles};
+use hotmint::network::service::{NetworkConfig, NetworkService, NetworkServiceHandles};
 
 let listen_addr = "/ip4/0.0.0.0/tcp/20000".parse().unwrap();
 
@@ -82,37 +82,51 @@ let NetworkServiceHandles {
     peer_info_rx,
     connected_count_rx,
     notif_connected_count_rx,
-} = NetworkService::create(
+} = NetworkService::create(NetworkConfig {
     listen_addr,
     peer_map,
     known_addresses,
-    None,           // Option<litep2p::crypto::ed25519::Keypair> — None generates a random keypair
-    peer_book,      // PeerBook (persistent peer address store)
-    pex_config,     // PexConfig (peer exchange settings)
-    false,          // relay_consensus: relay consensus messages to other peers
-    validator_keys, // initial validator public keys for relay sender verification
-).unwrap();
+    keypair: None,             // Option<litep2p::crypto::ed25519::Keypair> — None generates a random keypair
+    peer_book,                 // Arc<tokio::sync::RwLock<PeerBook>> (persistent peer address store)
+    pex_config,                // PexConfig (peer exchange settings)
+    relay_consensus: false,    // whether to relay consensus messages to other peers
+    initial_validators: validator_keys, // initial validator public keys for relay sender verification
+    chain_id_hash,             // [u8; 32] — Blake3 hash of the chain ID (for relay signature verification)
+}).unwrap();
 ```
 
-`NetworkService::create` takes eight parameters:
+`NetworkService::create` takes a single `NetworkConfig` struct with nine fields:
 1. `listen_addr` — P2P listen address (multiaddr)
 2. `peer_map` — mapping of `ValidatorId` ↔ `PeerId`
 3. `known_addresses` — bootstrap peer addresses
 4. `keypair` — `Option<litep2p::crypto::ed25519::Keypair>` (`None` generates a random keypair)
-5. `peer_book` — persistent peer address store (`Arc<RwLock<PeerBook>>`)
+5. `peer_book` — persistent peer address store (`Arc<tokio::sync::RwLock<PeerBook>>`)
 6. `pex_config` — peer exchange settings
 7. `relay_consensus: bool` — whether to relay consensus messages to other validators
 8. `initial_validators` — initial set of `(ValidatorId, PublicKey)` for relay sender signature verification
+9. `chain_id_hash: [u8; 32]` — Blake3 hash of the chain identifier, used for relay signature verification (must match the `chain_id_hash` in `ConsensusState`)
 
-It returns a `NetworkServiceHandles` struct with:
+It returns a `NetworkServiceHandles` struct with named fields:
 1. `service: NetworkService` — the service itself, must be `.run()` on a tokio task
-2. `sink` — implements `NetworkSink`, pass to `ConsensusEngine`
+2. `sink: Litep2pNetworkSink` — implements `NetworkSink`, pass to `ConsensusEngine`
 3. `msg_rx: Receiver<(Option<ValidatorId>, ConsensusMessage)>` — incoming consensus messages; sender is `None` for unknown peers
 4. `sync_req_rx: Receiver<IncomingSyncRequest>` — incoming sync requests from peers
 5. `sync_resp_rx: Receiver<SyncResponse>` — incoming sync responses from peers
 6. `peer_info_rx: watch::Receiver<Vec<PeerStatus>>` — live peer connection status updates
 7. `connected_count_rx: watch::Receiver<usize>` — number of TCP-connected peers
 8. `notif_connected_count_rx: watch::Receiver<usize>` — number of peers with an open notification substream (ready for consensus)
+
+### PeerBook
+
+The `PeerBook` is a persistent peer address store wrapped in `Arc<tokio::sync::RwLock<PeerBook>>` (note: `tokio::sync::RwLock`, not `std::sync::RwLock`). It is shared between the `NetworkService` and the PEX subsystem.
+
+### PEX Rate Limiting
+
+Peer Exchange (PEX) requests are rate-limited per peer with a 10-second cooldown. If a peer sends a PEX request within 10 seconds of its last request, the request is rejected. This prevents peers from flooding the network with PEX requests.
+
+### Relay Consensus
+
+When `relay_consensus` is `true`, the `NetworkService` relays received consensus messages to other connected peers. This is useful for non-validator nodes that act as relays. Relay deduplication uses a two-set rotation strategy to avoid re-broadcasting messages that have already been seen.
 
 ### Running
 
@@ -121,24 +135,22 @@ It returns a `NetworkServiceHandles` struct with:
 tokio::spawn(async move { net_service.run().await });
 
 // build the consensus engine with the P2P network sink
-use std::sync::{Arc, RwLock};
-use hotmint::consensus::engine::{EngineConfig, SharedBlockStore};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use hotmint::consensus::engine::{ConsensusEngineBuilder, SharedBlockStore};
 use hotmint::crypto::Ed25519Verifier;
 
 let shared_store: SharedBlockStore = Arc::new(RwLock::new(Box::new(store)));
-let engine = ConsensusEngine::new(
-    state,
-    shared_store,
-    Box::new(network_sink),
-    Box::new(app),
-    Box::new(signer),
-    msg_rx,
-    EngineConfig {
-        verifier: Box::new(Ed25519Verifier),
-        pacemaker: None,
-        persistence: None,
-    },
-);
+let engine = ConsensusEngineBuilder::new()
+    .state(state)
+    .store(shared_store)
+    .network(Box::new(network_sink))
+    .app(Box::new(app))
+    .signer(Box::new(signer))
+    .messages(msg_rx)
+    .verifier(Box::new(Ed25519Verifier))
+    .build()
+    .expect("all required fields must be set");
 tokio::spawn(async move { engine.run().await });
 ```
 
@@ -160,13 +172,14 @@ The notification protocol is fire-and-forget. The request-response protocol send
 
 ```rust
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use hotmint::prelude::*;
-use hotmint::consensus::engine::{ConsensusEngine, EngineConfig};
+use hotmint::consensus::engine::{ConsensusEngineBuilder, SharedBlockStore};
 use hotmint::consensus::state::ConsensusState;
 use hotmint::crypto::{Ed25519Signer, Ed25519Verifier};
 use hotmint::storage::block_store::VsdbBlockStore;
 use hotmint::storage::consensus_state::PersistentConsensusState;
-use hotmint::network::service::{NetworkService, PeerMap};
+use hotmint::network::service::{NetworkConfig, NetworkService, NetworkServiceHandles, PeerMap};
 
 async fn run_validator(
     vid: ValidatorId,
@@ -176,13 +189,14 @@ async fn run_validator(
     listen_addr: litep2p::types::multiaddr::Multiaddr,
     known_addresses: Vec<(litep2p::PeerId, Vec<litep2p::types::multiaddr::Multiaddr>)>,
     app: impl hotmint::consensus::application::Application + 'static,
+    chain_id: &str,
 ) {
     // persistent storage
     let store = VsdbBlockStore::new();
     let pstate = PersistentConsensusState::new();
 
-    // recover state
-    let mut state = ConsensusState::new(vid, validator_set);
+    // recover state (with chain ID for cross-chain replay prevention)
+    let mut state = ConsensusState::with_chain_id(vid, validator_set, chain_id);
     if let Some(v) = pstate.load_current_view() {
         state.current_view = v;
     }
@@ -206,34 +220,32 @@ async fn run_validator(
         peer_info_rx,
         connected_count_rx,
         notif_connected_count_rx,
-    } = NetworkService::create(
+    } = NetworkService::create(NetworkConfig {
         listen_addr,
         peer_map,
         known_addresses,
-        None,
+        keypair: None,
         peer_book,
         pex_config,
-        false,           // relay_consensus
-        validator_keys,  // initial validator keys for relay sender verification
-    ).unwrap();
+        relay_consensus: false,
+        initial_validators: validator_keys,
+        chain_id_hash: state.chain_id_hash,
+    }).unwrap();
     tokio::spawn(async move { net_service.run().await });
 
     // consensus engine
-    let shared_store: hotmint::consensus::engine::SharedBlockStore =
-        Arc::new(std::sync::RwLock::new(Box::new(store)));
-    let engine = ConsensusEngine::new(
-        state,
-        shared_store,
-        Box::new(network_sink),
-        Box::new(app),
-        Box::new(signer),
-        msg_rx,
-        EngineConfig {
-            verifier: Box::new(Ed25519Verifier),
-            pacemaker: None,
-            persistence: None,
-        },
-    );
+    let shared_store: SharedBlockStore =
+        Arc::new(RwLock::new(Box::new(store)));
+    let engine = ConsensusEngineBuilder::new()
+        .state(state)
+        .store(shared_store)
+        .network(Box::new(network_sink))
+        .app(Box::new(app))
+        .signer(Box::new(signer))
+        .messages(msg_rx)
+        .verifier(Box::new(Ed25519Verifier))
+        .build()
+        .expect("all required fields must be set");
     engine.run().await;
 }
 ```

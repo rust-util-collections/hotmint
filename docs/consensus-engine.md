@@ -82,6 +82,9 @@ The mutable state tracked by the engine:
 pub struct ConsensusState {
     pub validator_id: ValidatorId,
     pub validator_set: ValidatorSet,
+    /// Blake3 hash of the chain identifier — included in all signing bytes
+    /// to prevent cross-chain signature replay.
+    pub chain_id_hash: [u8; 32],
     pub current_view: ViewNumber,
     pub current_epoch: Epoch,
     pub role: ViewRole,               // Leader or Replica
@@ -94,6 +97,20 @@ pub struct ConsensusState {
 }
 ```
 
+`ConsensusState::new(validator_id, validator_set)` creates state with an empty chain ID (no domain separation). For production use, prefer `ConsensusState::with_chain_id(validator_id, validator_set, "my-chain")` which hashes the chain ID with Blake3 and stores it in `chain_id_hash`. This hash is included in all signing bytes to prevent cross-chain signature replay.
+
+### Chain ID Domain Separator
+
+The `chain_id_hash` field provides cross-chain replay prevention. When a chain ID is set, its Blake3 hash is included in the signing bytes of all consensus messages (votes, wishes, etc.). This means a signature produced for chain "alpha" is invalid on chain "beta", even if the same validator set is used on both chains.
+
+```rust
+// No chain ID (empty string, suitable for testing)
+let state = ConsensusState::new(vid, validator_set.clone());
+
+// With chain ID (recommended for production)
+let state = ConsensusState::with_chain_id(vid, validator_set, "my-chain-id");
+```
+
 ### ViewRole
 
 ```rust
@@ -103,7 +120,13 @@ pub enum ViewRole {
 }
 ```
 
-The role is determined at view entry: if `validator_set.leader_for_view(v).id == self.validator_id`, the node is the leader.
+The role is determined at view entry: `leader_for_view(v)` returns `Option<&ValidatorInfo>` (returns `None` only if the validator set is empty). In practice, use `.expect("non-empty validator set")` or `.unwrap()`:
+
+```rust
+if validator_set.leader_for_view(v).expect("non-empty validator set").id == self.validator_id {
+    // this node is the leader
+}
+```
 
 ### ViewStep
 
@@ -230,3 +253,29 @@ On timeout, the engine:
 3. Continues listening for messages (the view is not abandoned until a TC forms)
 
 See [Protocol](protocol.md) for the full pacemaker specification.
+
+## Signal Handling (Graceful Shutdown)
+
+The `hotmint` node binary handles SIGINT (Ctrl+C) and SIGTERM for graceful shutdown. The main `tokio::select!` block races the engine/network tasks against signal handlers:
+
+```rust
+tokio::select! {
+    // ... engine and network tasks ...
+    _ = tokio::signal::ctrl_c() => {
+        info!("received shutdown signal, exiting...");
+    }
+    _ = async {
+        #[cfg(unix)]
+        {
+            let mut sigterm = tokio::signal::unix::signal(
+                tokio::signal::unix::SignalKind::terminate()
+            ).expect("failed to register SIGTERM handler");
+            sigterm.recv().await;
+        }
+    } => {
+        info!("received SIGTERM, shutting down...");
+    }
+}
+```
+
+When either signal is received, the select block completes and the process exits cleanly. This is handled at the binary level (`crates/hotmint/src/bin/node.rs`), not inside the `ConsensusEngine` itself.

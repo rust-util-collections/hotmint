@@ -321,7 +321,7 @@ let engine = ConsensusEngine::new(
 Replace in-memory channels with litep2p for multi-process / multi-machine deployments:
 
 ```rust
-use hotmint::network::service::{NetworkService, PeerMap};
+use hotmint::network::service::{NetworkConfig, NetworkService, PeerMap};
 
 // build the peer map (ValidatorId <-> litep2p PeerId)
 let mut peer_map = PeerMap::new();
@@ -335,17 +335,17 @@ let known_addresses = vec![
     // ...
 ];
 
-let handles = NetworkService::create(
-    "/ip4/0.0.0.0/tcp/26656".parse().unwrap(),
+let handles = NetworkService::create(NetworkConfig {
+    listen_addr: "/ip4/0.0.0.0/tcp/26656".parse().unwrap(),
     peer_map,
     known_addresses,
-    None,          // keypair (auto-generated if None)
+    keypair: None,           // auto-generated if None
     peer_book,
     pex_config,
-    true,          // relay_consensus
+    relay_consensus: true,
     initial_validators,
     chain_id_hash,
-).unwrap();
+}).unwrap();
 
 // run the network event loop in background
 tokio::spawn(async move { handles.service.run().await });
