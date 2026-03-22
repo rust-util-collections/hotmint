@@ -11,8 +11,16 @@ use serde::{Deserialize, Serialize};
 
 /// Shell-escape a string by wrapping it in single quotes, with proper handling
 /// of embedded single quotes.  e.g. `foo'bar` -> `'foo'\''bar'`
+///
+/// Leading `~/` is replaced with `$HOME/` so that tilde expansion works
+/// even inside single quotes (the `$HOME` is spliced outside the quotes).
 fn shell_escape(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
+    if let Some(rest) = s.strip_prefix("~/") {
+        // $HOME must be outside quotes for expansion
+        format!("\"$HOME\"/'{}'", rest.replace('\'', "'\\''"))
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
 }
 
 /// Remote host configuration (from hosts.toml).
@@ -493,19 +501,15 @@ fn query_rpc_status(host: &str, port: u16) -> Result<(String, String, String)> {
     stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
 
     let req = r#"{"jsonrpc":"2.0","method":"status","params":[],"id":1}"#;
-    let http = format!(
-        "POST / HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        addr,
-        req.len(),
-        req
-    );
-    stream.write_all(http.as_bytes()).c(d!("write rpc"))?;
+    // Raw TCP JSON-RPC: send JSON directly followed by newline
+    stream
+        .write_all(format!("{}\n", req).as_bytes())
+        .c(d!("write rpc"))?;
 
     let mut buf = String::new();
     stream.read_to_string(&mut buf).ok();
 
-    // Extract JSON body after HTTP headers
-    let body = buf.split("\r\n\r\n").nth(1).unwrap_or("");
+    let body = &buf;
 
     // Simple JSON parsing — look for height/view/epoch fields
     let extract = |key: &str| -> String {
@@ -524,5 +528,9 @@ fn query_rpc_status(host: &str, port: u16) -> Result<(String, String, String)> {
             .unwrap_or_else(|| "-".into())
     };
 
-    Ok((extract("height"), extract("view"), extract("epoch")))
+    Ok((
+        extract("last_committed_height"),
+        extract("current_view"),
+        extract("epoch"),
+    ))
 }
