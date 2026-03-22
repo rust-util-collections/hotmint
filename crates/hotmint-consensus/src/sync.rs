@@ -18,19 +18,24 @@ use tracing::info;
 
 const SYNC_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Mutable state needed by block sync and replay.
+pub struct SyncState<'a> {
+    pub store: &'a mut dyn BlockStore,
+    pub app: &'a dyn Application,
+    pub current_epoch: &'a mut Epoch,
+    pub last_committed_height: &'a mut Height,
+    pub last_app_hash: &'a mut BlockHash,
+    pub chain_id_hash: &'a [u8; 32],
+}
+
 /// Run block sync: request missing blocks from peers and replay them.
 ///
 /// This should be called **before** the consensus engine starts.
 /// Returns the updated (height, epoch) after syncing.
 pub async fn sync_to_tip(
-    store: &mut dyn BlockStore,
-    app: &dyn Application,
-    current_epoch: &mut Epoch,
-    last_committed_height: &mut Height,
-    last_app_hash: &mut BlockHash,
+    state: &mut SyncState<'_>,
     request_tx: &mpsc::Sender<SyncRequest>,
     response_rx: &mut mpsc::Receiver<SyncResponse>,
-    chain_id_hash: &[u8; 32],
 ) -> Result<()> {
     // First, get status from peer
     request_tx
@@ -52,9 +57,9 @@ pub async fn sync_to_tip(
         }
     };
 
-    if peer_status <= *last_committed_height {
+    if peer_status <= *state.last_committed_height {
         info!(
-            our_height = last_committed_height.as_u64(),
+            our_height = state.last_committed_height.as_u64(),
             peer_height = peer_status.as_u64(),
             "already caught up"
         );
@@ -62,14 +67,14 @@ pub async fn sync_to_tip(
     }
 
     info!(
-        our_height = last_committed_height.as_u64(),
+        our_height = state.last_committed_height.as_u64(),
         peer_height = peer_status.as_u64(),
         "starting block sync"
     );
 
     // Batch sync loop
     loop {
-        let from = Height(last_committed_height.as_u64() + 1);
+        let from = Height(state.last_committed_height.as_u64() + 1);
         let to = Height(cmp::min(
             from.as_u64() + MAX_SYNC_BATCH - 1,
             peer_status.as_u64(),
@@ -96,30 +101,22 @@ pub async fn sync_to_tip(
         }
 
         // Validate chain continuity and replay
-        replay_blocks(
-            &blocks,
-            store,
-            app,
-            current_epoch,
-            last_committed_height,
-            last_app_hash,
-            chain_id_hash,
-        )?;
+        replay_blocks(&blocks, state)?;
 
         info!(
-            synced_to = last_committed_height.as_u64(),
+            synced_to = state.last_committed_height.as_u64(),
             target = peer_status.as_u64(),
             "sync progress"
         );
 
-        if *last_committed_height >= peer_status {
+        if *state.last_committed_height >= peer_status {
             break;
         }
     }
 
     info!(
-        height = last_committed_height.as_u64(),
-        epoch = %current_epoch.number,
+        height = state.last_committed_height.as_u64(),
+        epoch = %state.current_epoch.number,
         "block sync complete"
     );
     Ok(())
@@ -129,12 +126,7 @@ pub async fn sync_to_tip(
 /// Validates chain continuity (parent_hash linkage).
 pub fn replay_blocks(
     blocks: &[(Block, Option<hotmint_types::QuorumCertificate>)],
-    store: &mut dyn BlockStore,
-    app: &dyn Application,
-    current_epoch: &mut Epoch,
-    last_committed_height: &mut Height,
-    last_app_hash: &mut BlockHash,
-    chain_id_hash: &[u8; 32],
+    state: &mut SyncState<'_>,
 ) -> Result<()> {
     for (i, (block, qc)) in blocks.iter().enumerate() {
         // Validate chain continuity
@@ -148,15 +140,17 @@ pub fn replay_blocks(
         }
         // F-06: Validate first block links to our last committed block
         if i == 0
-            && last_committed_height.as_u64() > 0
-            && let Some(last) = store.get_block_by_height(*last_committed_height)
+            && state.last_committed_height.as_u64() > 0
+            && let Some(last) = state
+                .store
+                .get_block_by_height(*state.last_committed_height)
             && block.parent_hash != last.hash
         {
             return Err(eg!(
                 "sync batch first block parent {} does not match last committed block {} at height {}",
                 block.parent_hash,
                 last.hash,
-                last_committed_height
+                state.last_committed_height
             ));
         }
 
@@ -173,14 +167,14 @@ pub fn replay_blocks(
             // Verify QC aggregate signature and quorum
             let verifier = hotmint_crypto::Ed25519Verifier;
             let qc_bytes = hotmint_types::vote::Vote::signing_bytes(
-                chain_id_hash,
+                state.chain_id_hash,
                 cert.view,
                 &cert.block_hash,
                 hotmint_types::vote::VoteType::Vote,
             );
             if !hotmint_types::Verifier::verify_aggregate(
                 &verifier,
-                &current_epoch.validator_set,
+                &state.current_epoch.validator_set,
                 &qc_bytes,
                 &cert.aggregate_signature,
             ) {
@@ -189,8 +183,10 @@ pub fn replay_blocks(
                     block.height.as_u64()
                 ));
             }
-            if !hotmint_crypto::has_quorum(&current_epoch.validator_set, &cert.aggregate_signature)
-            {
+            if !hotmint_crypto::has_quorum(
+                &state.current_epoch.validator_set,
+                &cert.aggregate_signature,
+            ) {
                 return Err(eg!(
                     "sync QC below quorum threshold at height {}",
                     block.height.as_u64()
@@ -206,7 +202,7 @@ pub fn replay_blocks(
         }
 
         // Skip already-committed blocks
-        if block.height <= *last_committed_height {
+        if block.height <= *state.last_committed_height {
             continue;
         }
 
@@ -225,29 +221,29 @@ pub fn replay_blocks(
         // Skip when the application does not track state roots (e.g. NoopApplication),
         // so that fullnodes without an ABCI backend can sync from peers running real
         // applications that produce non-zero app_hash values.
-        if app.tracks_app_hash() && block.app_hash != *last_app_hash {
+        if state.app.tracks_app_hash() && block.app_hash != *state.last_app_hash {
             return Err(eg!(
                 "sync block app_hash mismatch at height {}: block {} != local {}",
                 block.height.as_u64(),
                 block.app_hash,
-                last_app_hash
+                state.last_app_hash
             ));
         }
 
         // Store the block
-        store.put_block(block.clone());
+        state.store.put_block(block.clone());
 
         // Run application lifecycle
         let ctx = BlockContext {
             height: block.height,
             view: block.view,
             proposer: block.proposer,
-            epoch: current_epoch.number,
-            epoch_start_view: current_epoch.start_view,
-            validator_set: &current_epoch.validator_set,
+            epoch: state.current_epoch.number,
+            epoch_start_view: state.current_epoch.start_view,
+            validator_set: &state.current_epoch.validator_set,
         };
 
-        if !app.validate_block(block, &ctx) {
+        if !state.app.validate_block(block, &ctx) {
             return Err(eg!(
                 "app rejected synced block at height {}",
                 block.height.as_u64()
@@ -255,14 +251,17 @@ pub fn replay_blocks(
         }
 
         let txs = commit::decode_payload(&block.payload);
-        let response = app
+        let response = state
+            .app
             .execute_block(&txs, &ctx)
             .c(d!("execute_block failed during sync"))?;
 
-        app.on_commit(block, &ctx)
+        state
+            .app
+            .on_commit(block, &ctx)
             .c(d!("on_commit failed during sync"))?;
 
-        *last_app_hash = if app.tracks_app_hash() {
+        *state.last_app_hash = if state.app.tracks_app_hash() {
             response.app_hash
         } else {
             // App does not compute state roots: carry the chain's authoritative
@@ -272,15 +271,17 @@ pub fn replay_blocks(
 
         // Handle epoch transitions
         if !response.validator_updates.is_empty() {
-            let new_vs = current_epoch
+            let new_vs = state
+                .current_epoch
                 .validator_set
                 .apply_updates(&response.validator_updates);
             // Epoch starts 2 views after the committing block (same as commit.rs)
             let epoch_start = ViewNumber(block.view.as_u64() + 2);
-            *current_epoch = Epoch::new(current_epoch.number.next(), epoch_start, new_vs);
+            *state.current_epoch =
+                Epoch::new(state.current_epoch.number.next(), epoch_start, new_vs);
         }
 
-        *last_committed_height = block.height;
+        *state.last_committed_height = block.height;
     }
 
     Ok(())
@@ -349,16 +350,15 @@ mod tests {
 
         let blocks: Vec<_> = vec![(b1, Some(qc1)), (b2, Some(qc2)), (b3, Some(qc3))];
         let mut app_hash = BlockHash::GENESIS;
-        replay_blocks(
-            &blocks,
-            &mut store,
-            &app,
-            &mut epoch,
-            &mut height,
-            &mut app_hash,
-            &TEST_CHAIN,
-        )
-        .unwrap();
+        let mut state = SyncState {
+            store: &mut store,
+            app: &app,
+            current_epoch: &mut epoch,
+            last_committed_height: &mut height,
+            last_app_hash: &mut app_hash,
+            chain_id_hash: &TEST_CHAIN,
+        };
+        replay_blocks(&blocks, &mut state).unwrap();
         assert_eq!(height, Height(3));
         assert!(store.get_block_by_height(Height(1)).is_some());
         assert!(store.get_block_by_height(Height(3)).is_some());
@@ -383,18 +383,15 @@ mod tests {
         // Non-genesis block without QC should be rejected
         let blocks: Vec<_> = vec![(b1, Some(qc1)), (b2, None)];
         let mut app_hash = BlockHash::GENESIS;
-        assert!(
-            replay_blocks(
-                &blocks,
-                &mut store,
-                &app,
-                &mut epoch,
-                &mut height,
-                &mut app_hash,
-                &TEST_CHAIN,
-            )
-            .is_err()
-        );
+        let mut state = SyncState {
+            store: &mut store,
+            app: &app,
+            current_epoch: &mut epoch,
+            last_committed_height: &mut height,
+            last_app_hash: &mut app_hash,
+            chain_id_hash: &TEST_CHAIN,
+        };
+        assert!(replay_blocks(&blocks, &mut state).is_err());
     }
 
     #[test]
@@ -417,17 +414,14 @@ mod tests {
         let qc3 = make_qc(&b3, &signer);
         let blocks: Vec<_> = vec![(b1, Some(qc1)), (b3, Some(qc3))];
         let mut app_hash = BlockHash::GENESIS;
-        assert!(
-            replay_blocks(
-                &blocks,
-                &mut store,
-                &app,
-                &mut epoch,
-                &mut height,
-                &mut app_hash,
-                &TEST_CHAIN,
-            )
-            .is_err()
-        );
+        let mut state = SyncState {
+            store: &mut store,
+            app: &app,
+            current_epoch: &mut epoch,
+            last_committed_height: &mut height,
+            last_app_hash: &mut app_hash,
+            chain_id_hash: &TEST_CHAIN,
+        };
+        assert!(replay_blocks(&blocks, &mut state).is_err());
     }
 }

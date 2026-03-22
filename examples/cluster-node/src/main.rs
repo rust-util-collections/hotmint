@@ -144,25 +144,25 @@ async fn run(home: &std::path::Path) -> Result<()> {
         let peer_book = hotmint::network::peer::PeerBook::load(&peer_book_path)
             .unwrap_or_else(|_| hotmint::network::peer::PeerBook::new(&peer_book_path));
         let peer_book = Arc::new(RwLock::new(peer_book));
-        NetworkService::create(
+        NetworkService::create(hotmint::network::service::NetworkConfig {
             listen_addr,
             peer_map,
             known_addresses,
-            Some(litep2p_keypair),
+            keypair: Some(litep2p_keypair),
             peer_book,
-            {
+            pex_config: {
                 let mut pex = config.pex.clone();
                 pex.private_peer_ids = config.p2p.private_peer_ids.clone();
                 pex
             },
-            config.node.relay_consensus,
-            validator_set
+            relay_consensus: config.node.relay_consensus,
+            initial_validators: validator_set
                 .validators()
                 .iter()
                 .map(|v| (v.id, v.public_key.clone()))
                 .collect(),
-            state.chain_id_hash,
-        )?
+            chain_id_hash: state.chain_id_hash,
+        })?
     };
 
     // Embedded application with status tracking
@@ -329,15 +329,18 @@ async fn run(home: &std::path::Path) -> Result<()> {
                 info!("starting block sync with V{}", vid.0);
                 let sync_app = NoopApplication;
                 let mut sync_store = hotmint::consensus::store::SharedStoreAdapter(store.clone());
+                let mut sync_state = hotmint::consensus::sync::SyncState {
+                    store: &mut sync_store,
+                    app: &sync_app,
+                    current_epoch: &mut engine_state_epoch,
+                    last_committed_height: &mut engine_state_height,
+                    last_app_hash: &mut engine_state_app_hash,
+                    chain_id_hash: &state.chain_id_hash,
+                };
                 match hotmint::consensus::sync::sync_to_tip(
-                    &mut sync_store,
-                    &sync_app,
-                    &mut engine_state_epoch,
-                    &mut engine_state_height,
-                    &mut engine_state_app_hash,
+                    &mut sync_state,
                     &sync_tx,
                     &mut sync_resp_rx,
-                    &state.chain_id_hash,
                 )
                 .await
                 {

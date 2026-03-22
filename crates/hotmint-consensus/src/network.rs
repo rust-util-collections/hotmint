@@ -2,6 +2,10 @@ use std::collections::HashMap;
 
 use hotmint_types::{ConsensusMessage, ValidatorId, ValidatorSet};
 
+/// Message type for the consensus channel: `(sender_id, message)`.
+pub type MsgSender = tokio::sync::mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>;
+pub type MsgReceiver = tokio::sync::mpsc::Receiver<(Option<ValidatorId>, ConsensusMessage)>;
+
 pub trait NetworkSink: Send + Sync {
     fn broadcast(&self, msg: ConsensusMessage);
     fn send_to(&self, target: ValidatorId, msg: ConsensusMessage);
@@ -13,20 +17,11 @@ pub trait NetworkSink: Send + Sync {
 /// Channel-based network stub: routes messages via mpsc senders
 pub struct ChannelNetwork {
     pub self_id: ValidatorId,
-    pub senders: Vec<(
-        ValidatorId,
-        tokio::sync::mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>,
-    )>,
+    pub senders: Vec<(ValidatorId, MsgSender)>,
 }
 
 impl ChannelNetwork {
-    pub fn new(
-        self_id: ValidatorId,
-        senders: Vec<(
-            ValidatorId,
-            tokio::sync::mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>,
-        )>,
-    ) -> Self {
+    pub fn new(self_id: ValidatorId, senders: Vec<(ValidatorId, MsgSender)>) -> Self {
         Self { self_id, senders }
     }
 
@@ -35,20 +30,9 @@ impl ChannelNetwork {
     /// Returns one `(ChannelNetwork, Receiver)` pair per validator
     /// (indexed by `ValidatorId(0)` .. `ValidatorId(n-1)`),
     /// eliminating the manual HashMap plumbing.
-    pub fn create_mesh(
-        n: u64,
-    ) -> Vec<(
-        ChannelNetwork,
-        tokio::sync::mpsc::Receiver<(Option<ValidatorId>, ConsensusMessage)>,
-    )> {
-        let mut senders: HashMap<
-            ValidatorId,
-            tokio::sync::mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>,
-        > = HashMap::new();
-        let mut receivers: HashMap<
-            ValidatorId,
-            tokio::sync::mpsc::Receiver<(Option<ValidatorId>, ConsensusMessage)>,
-        > = HashMap::new();
+    pub fn create_mesh(n: u64) -> Vec<(ChannelNetwork, MsgReceiver)> {
+        let mut senders: HashMap<ValidatorId, MsgSender> = HashMap::new();
+        let mut receivers: HashMap<ValidatorId, MsgReceiver> = HashMap::new();
 
         for i in 0..n {
             let (tx, rx) = tokio::sync::mpsc::channel(8192);
@@ -56,10 +40,8 @@ impl ChannelNetwork {
             receivers.insert(ValidatorId(i), rx);
         }
 
-        let all_senders: Vec<(
-            ValidatorId,
-            tokio::sync::mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>,
-        )> = senders.iter().map(|(&id, tx)| (id, tx.clone())).collect();
+        let all_senders: Vec<(ValidatorId, MsgSender)> =
+            senders.iter().map(|(&id, tx)| (id, tx.clone())).collect();
 
         (0..n)
             .map(|i| {

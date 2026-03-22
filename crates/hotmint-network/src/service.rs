@@ -164,19 +164,33 @@ pub struct NetworkService {
     pex_rate_limit: HashMap<PeerId, Instant>,
 }
 
+/// Configuration for creating a [`NetworkService`].
+pub struct NetworkConfig {
+    pub listen_addr: Multiaddr,
+    pub peer_map: PeerMap,
+    pub known_addresses: Vec<(PeerId, Vec<Multiaddr>)>,
+    pub keypair: Option<litep2p::crypto::ed25519::Keypair>,
+    pub peer_book: Arc<RwLock<PeerBook>>,
+    pub pex_config: PexConfig,
+    pub relay_consensus: bool,
+    pub initial_validators: Vec<(ValidatorId, hotmint_types::crypto::PublicKey)>,
+    pub chain_id_hash: [u8; 32],
+}
+
 impl NetworkService {
     /// Create the network service and all handles for the consensus engine.
-    pub fn create(
-        listen_addr: Multiaddr,
-        peer_map: PeerMap,
-        known_addresses: Vec<(PeerId, Vec<Multiaddr>)>,
-        keypair: Option<litep2p::crypto::ed25519::Keypair>,
-        peer_book: Arc<RwLock<PeerBook>>,
-        pex_config: PexConfig,
-        relay_consensus: bool,
-        initial_validators: Vec<(ValidatorId, hotmint_types::crypto::PublicKey)>,
-        chain_id_hash: [u8; 32],
-    ) -> Result<NetworkServiceHandles> {
+    pub fn create(config: NetworkConfig) -> Result<NetworkServiceHandles> {
+        let NetworkConfig {
+            listen_addr,
+            peer_map,
+            known_addresses,
+            keypair,
+            peer_book,
+            pex_config,
+            relay_consensus,
+            initial_validators,
+            chain_id_hash,
+        } = config;
         let (notif_config, notif_handle) = NotifConfigBuilder::new(NOTIF_PROTOCOL.into())
             .with_max_size(MAX_NOTIFICATION_SIZE)
             .with_handshake(vec![])

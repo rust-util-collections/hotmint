@@ -451,7 +451,7 @@ pub fn remote_status(base_dir: &Path, hosts_path: &Path) -> Result<()> {
                 let rpc_host = host
                     .external_ip
                     .as_deref()
-                    .unwrap_or_else(|| host.ssh.split('@').last().unwrap_or(&host.ssh));
+                    .unwrap_or_else(|| host.ssh.split('@').next_back().unwrap_or(&host.ssh));
                 match query_rpc_status(rpc_host, v.rpc_port) {
                     Ok((h, v, e)) => (h, v, e),
                     Err(_) => ("-".into(), "-".into(), "-".into()),
@@ -513,8 +513,8 @@ fn query_rpc_status(host: &str, port: u16) -> Result<(String, String, String)> {
             .and_then(|i| {
                 let rest = &body[i + key.len() + 3..];
                 // Handle both number and string values
-                if rest.starts_with('"') {
-                    rest[1..].split('"').next().map(|s| s.to_string())
+                if let Some(stripped) = rest.strip_prefix('"') {
+                    stripped.split('"').next().map(|s| s.to_string())
                 } else {
                     rest.split(|c: char| !c.is_ascii_digit())
                         .next()

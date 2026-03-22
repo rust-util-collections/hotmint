@@ -8,7 +8,7 @@ use tokio::sync::RwLock;
 
 use hotmint_consensus::application::Application;
 use hotmint_consensus::engine::{ConsensusEngine, EngineConfig};
-use hotmint_consensus::network::ChannelNetwork;
+use hotmint_consensus::network::{ChannelNetwork, MsgSender};
 use hotmint_consensus::state::ConsensusState;
 use hotmint_consensus::store::MemoryBlockStore;
 use hotmint_crypto::{Ed25519Signer, Ed25519Verifier};
@@ -48,10 +48,7 @@ fn spawn_network(n: u64) -> (Vec<Arc<AtomicU64>>, Vec<tokio::task::JoinHandle<()
     let validator_set = ValidatorSet::new(validator_infos);
 
     let mut receivers = HashMap::new();
-    let mut all_senders: HashMap<
-        ValidatorId,
-        mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>,
-    > = HashMap::new();
+    let mut all_senders: HashMap<ValidatorId, MsgSender> = HashMap::new();
 
     for i in 0..n {
         let (tx, rx) = mpsc::channel(8192);
@@ -65,10 +62,7 @@ fn spawn_network(n: u64) -> (Vec<Arc<AtomicU64>>, Vec<tokio::task::JoinHandle<()
     for i in 0..n {
         let vid = ValidatorId(i);
         let rx = receivers.remove(&vid).unwrap();
-        let senders: Vec<(
-            ValidatorId,
-            mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>,
-        )> = all_senders
+        let senders: Vec<(ValidatorId, MsgSender)> = all_senders
             .iter()
             .map(|(&id, tx)| (id, tx.clone()))
             .collect();

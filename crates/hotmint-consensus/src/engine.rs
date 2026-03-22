@@ -784,10 +784,10 @@ impl ConsensusEngine {
                 // The future-view path already calls validate_double_cert; the same-view path
                 // passes the DC straight to on_proposal → try_commit without verification.
                 // A Byzantine leader could inject a forged DC to trigger incorrect commits.
-                if let Some(ref dc) = double_cert {
-                    if !self.validate_double_cert(dc) {
-                        return Ok(());
-                    }
+                if let Some(ref dc) = double_cert
+                    && !self.validate_double_cert(dc)
+                {
+                    return Ok(());
                 }
 
                 // R-28: persist justify QC as commit evidence for the block it certifies.
@@ -795,12 +795,11 @@ impl ConsensusEngine {
                 // once), the innermost block gets its own commit QC, but ancestor blocks only
                 // get the chain-rule commit and have no stored QC.  Storing the justify QC here
                 // ensures that sync responders can later serve those ancestor blocks with proof.
-                if justify.aggregate_signature.count() > 0 {
-                    if let Some(justified_block) = store.get_block(&justify.block_hash) {
-                        if store.get_commit_qc(justified_block.height).is_none() {
-                            store.put_commit_qc(justified_block.height, justify.clone());
-                        }
-                    }
+                if justify.aggregate_signature.count() > 0
+                    && let Some(justified_block) = store.get_block(&justify.block_hash)
+                    && store.get_commit_qc(justified_block.height).is_none()
+                {
+                    store.put_commit_qc(justified_block.height, justify.clone());
                 }
 
                 let maybe_pending = view_protocol::on_proposal(
@@ -858,15 +857,15 @@ impl ConsensusEngine {
                     // we defer to the QC's 2f+1 signatures for safety.
                     if self.app.tracks_app_hash() {
                         let store = self.store.read().await;
-                        if let Some(block) = store.get_block(&certificate.block_hash) {
-                            if block.app_hash != self.state.last_app_hash {
-                                warn!(
-                                    block_app_hash = %block.app_hash,
-                                    local_app_hash = %self.state.last_app_hash,
-                                    "prepare block app_hash mismatch, ignoring"
-                                );
-                                return Ok(());
-                            }
+                        if let Some(block) = store.get_block(&certificate.block_hash)
+                            && block.app_hash != self.state.last_app_hash
+                        {
+                            warn!(
+                                block_app_hash = %block.app_hash,
+                                local_app_hash = %self.state.last_app_hash,
+                                "prepare block app_hash mismatch, ignoring"
+                            );
+                            return Ok(());
                         }
                     }
                     view_protocol::on_prepare(

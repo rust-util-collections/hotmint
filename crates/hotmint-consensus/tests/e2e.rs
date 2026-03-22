@@ -31,6 +31,7 @@ use tokio::sync::mpsc;
 // ---------------------------------------------------------------------------
 
 type MsgSender = mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>;
+type MsgReceiver = mpsc::Receiver<(Option<ValidatorId>, ConsensusMessage)>;
 
 /// Shared mutable routing table used by all nodes in a test.
 #[derive(Clone)]
@@ -83,10 +84,7 @@ fn spawn_node(
     validator_set: ValidatorSet,
     routing: &SharedRouting,
     app: impl Application + 'static,
-) -> (
-    mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>,
-    tokio::task::JoinHandle<()>,
-) {
+) -> (MsgSender, tokio::task::JoinHandle<()>) {
     let (tx, rx) = mpsc::channel(8192);
     routing.register(vid, tx.clone());
 
@@ -461,9 +459,8 @@ async fn test_equivocation_detected_via_injected_votes() {
     };
 
     // Create channels manually so we can pre-load V1's queue
-    let mut node_txs: Vec<mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>> = Vec::new();
-    let mut node_rxs: Vec<Option<mpsc::Receiver<(Option<ValidatorId>, ConsensusMessage)>>> =
-        Vec::new();
+    let mut node_txs: Vec<MsgSender> = Vec::new();
+    let mut node_rxs: Vec<Option<MsgReceiver>> = Vec::new();
     for i in 0..4u64 {
         let (tx, rx) = mpsc::channel(8192);
         routing.register(ValidatorId(i), tx.clone());
