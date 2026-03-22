@@ -2,8 +2,9 @@ use ruc::*;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::RwLock;
+
 use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::sync::RwLock;
 
 use hotmint_consensus::application::Application;
 use hotmint_consensus::engine::{ConsensusEngine, EngineConfig};
@@ -47,8 +48,10 @@ fn spawn_network(n: u64) -> (Vec<Arc<AtomicU64>>, Vec<tokio::task::JoinHandle<()
     let validator_set = ValidatorSet::new(validator_infos);
 
     let mut receivers = HashMap::new();
-    let mut all_senders: HashMap<ValidatorId, mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>> =
-        HashMap::new();
+    let mut all_senders: HashMap<
+        ValidatorId,
+        mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>,
+    > = HashMap::new();
 
     for i in 0..n {
         let (tx, rx) = mpsc::channel(8192);
@@ -62,11 +65,13 @@ fn spawn_network(n: u64) -> (Vec<Arc<AtomicU64>>, Vec<tokio::task::JoinHandle<()
     for i in 0..n {
         let vid = ValidatorId(i);
         let rx = receivers.remove(&vid).unwrap();
-        let senders: Vec<(ValidatorId, mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>)> =
-            all_senders
-                .iter()
-                .map(|(&id, tx)| (id, tx.clone()))
-                .collect();
+        let senders: Vec<(
+            ValidatorId,
+            mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>,
+        )> = all_senders
+            .iter()
+            .map(|(&id, tx)| (id, tx.clone()))
+            .collect();
 
         let network = ChannelNetwork::new(vid, senders);
         let store = Arc::new(RwLock::new(

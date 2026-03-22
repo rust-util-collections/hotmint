@@ -238,6 +238,12 @@ pub async fn write_frame(
     writer: &mut (impl tokio::io::AsyncWriteExt + Unpin),
     payload: &[u8],
 ) -> io::Result<()> {
+    if payload.len() > MAX_FRAME_SIZE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("frame size {} exceeds max {MAX_FRAME_SIZE}", payload.len()),
+        ));
+    }
     let len = payload.len() as u32;
     writer.write_all(&len.to_le_bytes()).await?;
     writer.write_all(payload).await?;

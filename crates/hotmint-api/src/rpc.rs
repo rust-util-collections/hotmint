@@ -2,7 +2,9 @@ use ruc::*;
 
 use std::io;
 use std::net::SocketAddr;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use tokio::sync::RwLock;
 
 use crate::types::{
     BlockInfo, EpochInfo, RpcRequest, RpcResponse, StatusInfo, TxResult, ValidatorInfoResponse,
@@ -197,7 +199,7 @@ async fn handle_request(state: &RpcState, line: &str) -> RpcResponse {
                     );
                 }
             };
-            let store = state.store.read().unwrap();
+            let store = state.store.read().await;
             match store.get_block_by_height(Height(height)) {
                 Some(block) => json_ok(req.id, &block_to_info(&block)),
                 None => RpcResponse::err(
@@ -212,7 +214,7 @@ async fn handle_request(state: &RpcState, line: &str) -> RpcResponse {
             let hash_hex = req.params.as_str().unwrap_or_default();
             match hex_to_block_hash(hash_hex) {
                 Some(hash) => {
-                    let store = state.store.read().unwrap();
+                    let store = state.store.read().await;
                     match store.get_block(&hash) {
                         Some(block) => json_ok(req.id, &block_to_info(&block)),
                         None => RpcResponse::err(req.id, -32602, "block not found".to_string()),
@@ -316,10 +318,7 @@ async fn read_line_limited<R: AsyncBufReadExt + Unpin>(
         buf.extend_from_slice(available);
         reader.consume(to_consume);
         if buf.len() > max_bytes {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "line too long",
-            ));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "line too long"));
         }
     }
 }

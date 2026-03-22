@@ -174,7 +174,7 @@ impl GenesisDoc {
 
 // ── priv_validator_key.json ────────────────────────────────────────
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct PrivValidatorKey {
     pub validator_id: u64,
     /// Hex-encoded ed25519 public key.
@@ -203,7 +203,14 @@ impl PrivValidatorKey {
     pub fn save(&self, path: &Path) -> Result<()> {
         let contents =
             serde_json::to_string_pretty(self).c(d!("serialize priv_validator_key.json"))?;
-        fs::write(path, contents).c(d!("write priv_validator_key.json"))
+        fs::write(path, &contents).c(d!("write priv_validator_key.json"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+                .c(d!("set permissions on priv_validator_key.json"))?;
+        }
+        Ok(())
     }
 
     pub fn to_signing_key(&self) -> Result<SigningKey> {
@@ -221,6 +228,16 @@ impl PrivValidatorKey {
     /// Derive the litep2p PeerId from the public key.
     pub fn peer_id(&self) -> Result<litep2p::PeerId> {
         peer_id_from_hex(&self.public_key)
+    }
+}
+
+impl std::fmt::Debug for PrivValidatorKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrivValidatorKey")
+            .field("validator_id", &self.validator_id)
+            .field("public_key", &self.public_key)
+            .field("private_key", &"[REDACTED]")
+            .finish()
     }
 }
 
@@ -250,7 +267,7 @@ fn peer_id_from_hex(public_key_hex: &str) -> Result<litep2p::PeerId> {
 /// The node key determines the litep2p `PeerId` used in P2P networking.
 /// It is independent of the validator key so that a node operator can
 /// rotate P2P identity without affecting consensus participation.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct NodeKey {
     /// Hex-encoded ed25519 public key (32 bytes → 64 hex chars).
     pub public_key: String,
@@ -277,7 +294,14 @@ impl NodeKey {
 
     pub fn save(&self, path: &Path) -> Result<()> {
         let contents = serde_json::to_string_pretty(self).c(d!("serialize node_key.json"))?;
-        fs::write(path, contents).c(d!("write node_key.json"))
+        fs::write(path, &contents).c(d!("write node_key.json"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+                .c(d!("set permissions on node_key.json"))?;
+        }
+        Ok(())
     }
 
     /// Convert to a litep2p Ed25519 keypair for P2P networking.
@@ -288,6 +312,15 @@ impl NodeKey {
     /// Derive the litep2p PeerId from the public key.
     pub fn peer_id(&self) -> Result<litep2p::PeerId> {
         peer_id_from_hex(&self.public_key)
+    }
+}
+
+impl std::fmt::Debug for NodeKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NodeKey")
+            .field("public_key", &self.public_key)
+            .field("private_key", &"[REDACTED]")
+            .finish()
     }
 }
 
@@ -314,9 +347,24 @@ pub fn init_node_dir(home: &Path) -> Result<()> {
     fs::create_dir_all(&config_dir).c(d!("create config dir"))?;
     fs::create_dir_all(&data_dir).c(d!("create data dir"))?;
 
+    // Refuse to overwrite existing key files
+    let priv_key_path = config_dir.join("priv_validator_key.json");
+    if priv_key_path.exists() {
+        return Err(eg!(
+            "refusing to overwrite existing key file: {}",
+            priv_key_path.display()
+        ));
+    }
+    let node_key_path = config_dir.join("node_key.json");
+    if node_key_path.exists() {
+        return Err(eg!(
+            "refusing to overwrite existing key file: {}",
+            node_key_path.display()
+        ));
+    }
+
     // Generate validator key
     let priv_key = PrivValidatorKey::generate();
-    let priv_key_path = config_dir.join("priv_validator_key.json");
     priv_key.save(&priv_key_path)?;
 
     // Generate node key (P2P identity)

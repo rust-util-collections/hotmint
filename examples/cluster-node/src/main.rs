@@ -9,7 +9,9 @@
 
 use ruc::*;
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use tokio::sync::RwLock;
 
 use clap::Parser;
 use tokio::sync::watch;
@@ -96,7 +98,8 @@ async fn run(home: &std::path::Path) -> Result<()> {
 
     // Restore state
     let pcs = PersistentConsensusState::new();
-    let mut state = ConsensusState::new(our_vid, validator_set.clone());
+    let mut state =
+        ConsensusState::with_chain_id(our_vid, validator_set.clone(), &genesis.chain_id);
     if let Some(view) = pcs.load_current_view() {
         state.current_view = view;
     }
@@ -158,6 +161,7 @@ async fn run(home: &std::path::Path) -> Result<()> {
                 .iter()
                 .map(|v| (v.id, v.public_key.clone()))
                 .collect(),
+            state.chain_id_hash,
         )?
     };
 
@@ -237,7 +241,7 @@ async fn run(home: &std::path::Path) -> Result<()> {
                             Height(to_height.as_u64().min(
                                 from_height.as_u64() + hotmint_types::sync::MAX_SYNC_BATCH - 1,
                             ));
-                        let s = store.read().unwrap();
+                        let s = store.read().await;
                         let blocks = s.get_blocks_in_range(from_height, clamped);
                         let blocks_with_qcs: Vec<_> = blocks
                             .into_iter()
@@ -272,9 +276,11 @@ async fn run(home: &std::path::Path) -> Result<()> {
                 info!("no peers connected within timeout, skipping sync");
                 break;
             }
-            let _ =
-                tokio::time::timeout(tokio::time::Duration::from_millis(500), notif_count_rx.changed())
-                    .await;
+            let _ = tokio::time::timeout(
+                tokio::time::Duration::from_millis(500),
+                notif_count_rx.changed(),
+            )
+            .await;
         }
 
         if *notif_count_rx.borrow() > 0 {
@@ -286,16 +292,17 @@ async fn run(home: &std::path::Path) -> Result<()> {
                 .filter_map(|p| {
                     let (id_str, _) = p.split_once('@')?;
                     let vid = ValidatorId(id_str.parse::<u64>().ok()?);
-                    let peer_id = genesis
-                        .validators
-                        .iter()
-                        .find(|v| v.id == vid.0)
-                        .and_then(|gv| {
-                            let pk = hex::decode(&gv.public_key).ok()?;
-                            let lpk =
-                                litep2p::crypto::ed25519::PublicKey::try_from_bytes(&pk).ok()?;
-                            Some(lpk.to_peer_id())
-                        })?;
+                    let peer_id =
+                        genesis
+                            .validators
+                            .iter()
+                            .find(|v| v.id == vid.0)
+                            .and_then(|gv| {
+                                let pk = hex::decode(&gv.public_key).ok()?;
+                                let lpk = litep2p::crypto::ed25519::PublicKey::try_from_bytes(&pk)
+                                    .ok()?;
+                                Some(lpk.to_peer_id())
+                            })?;
                     Some((vid, peer_id))
                 })
                 .collect();
@@ -321,8 +328,7 @@ async fn run(home: &std::path::Path) -> Result<()> {
 
                 info!("starting block sync with V{}", vid.0);
                 let sync_app = NoopApplication;
-                let mut sync_store =
-                    hotmint::consensus::store::SharedStoreAdapter(store.clone());
+                let mut sync_store = hotmint::consensus::store::SharedStoreAdapter(store.clone());
                 match hotmint::consensus::sync::sync_to_tip(
                     &mut sync_store,
                     &sync_app,
@@ -331,6 +337,7 @@ async fn run(home: &std::path::Path) -> Result<()> {
                     &mut engine_state_app_hash,
                     &sync_tx,
                     &mut sync_resp_rx,
+                    &state.chain_id_hash,
                 )
                 .await
                 {
@@ -361,7 +368,7 @@ async fn run(home: &std::path::Path) -> Result<()> {
     // (accurate even when the network experienced view timeouts where view >> height).
     if engine_state_height > Height::GENESIS {
         let synced_view = {
-            let s = store.read().unwrap();
+            let s = store.read().await;
             s.get_block_by_height(engine_state_height)
                 .map(|b| ViewNumber(b.view.as_u64() + 1))
                 .unwrap_or(ViewNumber(engine_state_height.as_u64() + 1))

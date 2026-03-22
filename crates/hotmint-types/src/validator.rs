@@ -113,7 +113,10 @@ impl ValidatorSet {
 
     /// Quorum threshold: ceil(2n/3) where n = total_power
     pub fn quorum_threshold(&self) -> u64 {
-        (self.total_power * 2).div_ceil(3)
+        self.total_power
+            .checked_mul(2)
+            .expect("total_power overflow in quorum_threshold")
+            .div_ceil(3)
     }
 
     /// Maximum faulty power: total_power - quorum_threshold
@@ -121,10 +124,14 @@ impl ValidatorSet {
         self.total_power - self.quorum_threshold()
     }
 
-    /// Round-robin leader selection: v mod n
-    pub fn leader_for_view(&self, view: ViewNumber) -> &ValidatorInfo {
+    /// Round-robin leader selection: v mod n.
+    /// Returns `None` if the validator set is empty.
+    pub fn leader_for_view(&self, view: ViewNumber) -> Option<&ValidatorInfo> {
+        if self.validators.is_empty() {
+            return None;
+        }
         let idx = (view.as_u64() as usize) % self.validators.len();
-        &self.validators[idx]
+        Some(&self.validators[idx])
     }
 
     pub fn validator_count(&self) -> usize {
@@ -222,10 +229,22 @@ mod tests {
     #[test]
     fn test_leader_rotation() {
         let vs = make_vs(&[1, 1, 1, 1]);
-        assert_eq!(vs.leader_for_view(ViewNumber(0)).id, ValidatorId(0));
-        assert_eq!(vs.leader_for_view(ViewNumber(1)).id, ValidatorId(1));
-        assert_eq!(vs.leader_for_view(ViewNumber(4)).id, ValidatorId(0));
-        assert_eq!(vs.leader_for_view(ViewNumber(7)).id, ValidatorId(3));
+        assert_eq!(
+            vs.leader_for_view(ViewNumber(0)).unwrap().id,
+            ValidatorId(0)
+        );
+        assert_eq!(
+            vs.leader_for_view(ViewNumber(1)).unwrap().id,
+            ValidatorId(1)
+        );
+        assert_eq!(
+            vs.leader_for_view(ViewNumber(4)).unwrap().id,
+            ValidatorId(0)
+        );
+        assert_eq!(
+            vs.leader_for_view(ViewNumber(7)).unwrap().id,
+            ValidatorId(3)
+        );
     }
 
     #[test]

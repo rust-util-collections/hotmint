@@ -73,20 +73,79 @@ enum Command {
     Clean,
     /// Destroy the entire cluster (remove everything).
     Destroy,
-    /// Deploy cluster to remote machines via SSH.
+    /// Deploy cluster to remote machines via SSH + git sync.
     Deploy {
         /// Path to hosts configuration file (TOML).
         #[arg(long)]
         hosts: PathBuf,
-        /// Path to hotmint source directory.
-        #[arg(long, default_value = ".")]
-        source: PathBuf,
         /// Binary crate to build (default: cluster-node).
         #[arg(long, default_value = "cluster-node")]
         package: String,
+        /// Git remote URL (default: auto-detect from local origin).
+        #[arg(long)]
+        repo: Option<String>,
+        /// Git branch to deploy (default: current branch).
+        #[arg(long)]
+        branch: Option<String>,
     },
     /// Show node info (keys, peer IDs).
     Info,
+
+    // --- Remote cluster operations (chaindev-style) ---
+    /// Execute a command on all remote hosts.
+    Exec {
+        /// Path to hosts configuration file (TOML).
+        #[arg(long)]
+        hosts: PathBuf,
+        /// Command to execute on each remote host.
+        #[arg(trailing_var_arg = true, required = true)]
+        cmd: Vec<String>,
+    },
+    /// Push a local file/directory to all remote hosts.
+    Push {
+        /// Path to hosts configuration file (TOML).
+        #[arg(long)]
+        hosts: PathBuf,
+        /// Local file or directory to push.
+        #[arg(long)]
+        local: PathBuf,
+        /// Remote destination path.
+        #[arg(long)]
+        remote: String,
+    },
+    /// Pull a file from all remote hosts into a local directory.
+    Pull {
+        /// Path to hosts configuration file (TOML).
+        #[arg(long)]
+        hosts: PathBuf,
+        /// Remote file path to pull.
+        #[arg(long)]
+        remote: String,
+        /// Local directory to store pulled files (suffixed with hostname).
+        #[arg(long, default_value = ".")]
+        local_dir: PathBuf,
+    },
+    /// Collect, tail, or grep logs from remote nodes.
+    Logs {
+        /// Path to hosts configuration file (TOML).
+        #[arg(long)]
+        hosts: PathBuf,
+        /// Number of tail lines (default: 50).
+        #[arg(long, default_value_t = 50)]
+        lines: u32,
+        /// Grep pattern to filter log lines.
+        #[arg(long)]
+        grep: Option<String>,
+        /// Download all logs to a local directory.
+        #[arg(long)]
+        collect: Option<PathBuf>,
+    },
+    /// Show status of all remote nodes.
+    RemoteStatus {
+        /// Path to hosts configuration file (TOML).
+        #[arg(long)]
+        hosts: PathBuf,
+    },
 }
 
 fn main() {
@@ -114,10 +173,53 @@ fn main() {
         Command::Destroy => cluster::destroy(&cli.base_dir),
         Command::Deploy {
             hosts,
-            source,
             package,
-        } => remote::deploy(&cli.base_dir, &hosts, &source, &package),
+            repo,
+            branch,
+        } => (|| -> ruc::Result<()> {
+            // Auto-detect repo URL from local origin
+            let repo_url = match repo {
+                Some(url) => url,
+                None => {
+                    let output = std::process::Command::new("git")
+                        .args(["remote", "get-url", "origin"])
+                        .output()
+                        .map_err(|e| ruc::eg!("failed to get git remote: {}", e))?;
+                    String::from_utf8_lossy(&output.stdout).trim().to_string()
+                }
+            };
+            // Auto-detect current branch
+            let branch_name = match branch {
+                Some(b) => b,
+                None => {
+                    let output = std::process::Command::new("git")
+                        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                        .output()
+                        .map_err(|e| ruc::eg!("failed to get git branch: {}", e))?;
+                    String::from_utf8_lossy(&output.stdout).trim().to_string()
+                }
+            };
+            remote::deploy(&cli.base_dir, &hosts, &package, &repo_url, &branch_name)
+        })(),
         Command::Info => cluster::info(&cli.base_dir),
+        Command::Exec { hosts, cmd } => remote::exec_all(&hosts, &cmd.join(" ")),
+        Command::Push {
+            hosts,
+            local,
+            remote: dest,
+        } => remote::push_all(&hosts, &local, &dest),
+        Command::Pull {
+            hosts,
+            remote: src,
+            local_dir,
+        } => remote::pull_all(&hosts, &src, &local_dir),
+        Command::Logs {
+            hosts,
+            lines,
+            grep,
+            collect,
+        } => remote::logs(&hosts, lines, grep.as_deref(), collect.as_deref()),
+        Command::RemoteStatus { hosts } => remote::remote_status(&cli.base_dir, &hosts),
     };
 
     if let Err(e) = result {

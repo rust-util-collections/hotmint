@@ -73,13 +73,26 @@ pub fn try_commit(
             break;
         }
         let parent_hash = current.parent_hash;
+        let current_height = current.height;
         to_commit.push(current);
         if parent_hash == BlockHash::GENESIS {
             break;
         }
         match store.get_block(&parent_hash) {
             Some(parent) => current = parent,
-            None => break,
+            None => {
+                // If the missing ancestor is above last committed + 1, the store
+                // is corrupt or incomplete — we must not silently skip blocks.
+                if current_height > Height(last_committed_height.as_u64() + 1) {
+                    return Err(eg!(
+                        "missing ancestor block {} for height {} (last committed: {})",
+                        parent_hash,
+                        current_height,
+                        last_committed_height
+                    ));
+                }
+                break;
+            }
         }
     }
 

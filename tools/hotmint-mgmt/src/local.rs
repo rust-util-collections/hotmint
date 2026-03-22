@@ -22,8 +22,8 @@ fn find_binary(binary: Option<&Path>) -> Result<PathBuf> {
     }
 
     // Try workspace target/release
-    let workspace_bin = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/release/cluster-node");
+    let workspace_bin =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/release/cluster-node");
     if workspace_bin.exists() {
         return workspace_bin.canonicalize().c(d!());
     }
@@ -112,10 +112,11 @@ pub fn start(base_dir: &Path, node: Option<u32>, binary: Option<&Path>) -> Resul
     for v in &nodes {
         // Check if already running
         if let Some(pid) = read_pid(base_dir, v.id)
-            && is_running(pid) {
-                println!("V{}: already running (pid {})", v.id, pid);
-                continue;
-            }
+            && is_running(pid)
+        {
+            println!("V{}: already running (pid {})", v.id, pid);
+            continue;
+        }
 
         let log_file = base_dir.join(format!("v{}.log", v.id));
         let log = fs::File::create(&log_file).c(d!("create log file"))?;
@@ -165,7 +166,10 @@ pub fn stop(base_dir: &Path, node: Option<u32>) -> Result<()> {
                 }
                 println!("V{}: stopped (pid {})", v.id, pid);
             } else if is_running(pid) {
-                println!("V{}: pid {} is not a cluster-node (stale pid file?)", v.id, pid);
+                println!(
+                    "V{}: pid {} is not a cluster-node (stale pid file?)",
+                    v.id, pid
+                );
             } else {
                 println!("V{}: not running", v.id);
             }
@@ -190,9 +194,7 @@ pub fn status(base_dir: &Path) -> Result<()> {
     println!();
 
     for v in &state.validators {
-        let running = read_pid(base_dir, v.id)
-            .map(is_running)
-            .unwrap_or(false);
+        let running = read_pid(base_dir, v.id).map(is_running).unwrap_or(false);
 
         let status_str = if running { "RUNNING" } else { "STOPPED" };
 
@@ -236,17 +238,18 @@ fn query_rpc_status(host: &str, port: u16) -> Result<String> {
     let _ = stream.read_to_string(&mut response);
 
     if let Ok(val) = serde_json::from_str::<serde_json::Value>(response.trim())
-        && let Some(result) = val.get("result") {
-            let height = result
-                .get("last_committed_height")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let view = result
-                .get("current_view")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let epoch = result.get("epoch").and_then(|v| v.as_u64()).unwrap_or(0);
-            return Ok(format!("height={} view={} epoch={}", height, view, epoch));
-        }
+        && let Some(result) = val.get("result")
+    {
+        let height = result
+            .get("last_committed_height")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let view = result
+            .get("current_view")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let epoch = result.get("epoch").and_then(|v| v.as_u64()).unwrap_or(0);
+        return Ok(format!("height={} view={} epoch={}", height, view, epoch));
+    }
     Err(eg!("could not parse RPC response"))
 }

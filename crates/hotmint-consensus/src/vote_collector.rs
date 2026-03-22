@@ -119,13 +119,15 @@ mod tests {
         (ValidatorSet::new(infos), signers)
     }
 
+    const TEST_CHAIN: [u8; 32] = [0u8; 32];
+
     fn make_vote(
         signer: &Ed25519Signer,
         view: ViewNumber,
         hash: BlockHash,
         vote_type: VoteType,
     ) -> Vote {
-        let bytes = Vote::signing_bytes(view, &hash, vote_type);
+        let bytes = Vote::signing_bytes(&TEST_CHAIN, view, &hash, vote_type);
         Vote {
             block_hash: hash,
             view,

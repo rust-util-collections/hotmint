@@ -157,8 +157,7 @@ mod tests {
         // Build a zstd frame that decompresses to just over the limit.
         // Use a highly-compressible byte pattern so the compressed size stays small.
         let oversized: Vec<u8> = vec![0xAAu8; MAX_DECOMPRESSED_SIZE + 1];
-        let mut compressed =
-            zstd::encode_all(oversized.as_slice(), ZSTD_LEVEL).unwrap();
+        let mut compressed = zstd::encode_all(oversized.as_slice(), ZSTD_LEVEL).unwrap();
         // Prepend the zstd tag byte to form a valid-looking wire frame
         compressed.insert(0, TAG_ZSTD);
         let result: Result<Vec<u8>, _> = decode(&compressed);

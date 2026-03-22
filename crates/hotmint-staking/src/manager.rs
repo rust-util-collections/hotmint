@@ -201,6 +201,13 @@ impl<S: StakingStore> StakingManager<S> {
             .get_validator(id)
             .ok_or_else(|| eg!("validator {} not found", id))?;
 
+        if vs.jailed {
+            return Err(eg!(
+                "validator {} already jailed, refusing double slash",
+                id
+            ));
+        }
+
         let rate = match reason {
             SlashReason::DoubleSign => self.config.slash_rate_double_sign,
             SlashReason::Downtime => self.config.slash_rate_downtime,

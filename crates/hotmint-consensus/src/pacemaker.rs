@@ -1,5 +1,5 @@
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::time::Duration;
 
 use hotmint_types::crypto::{AggregateSignature, Signature};
@@ -113,13 +113,14 @@ impl Pacemaker {
     /// Build the Wish message for timeout
     pub fn build_wish(
         &self,
+        chain_id_hash: &[u8; 32],
         current_view: ViewNumber,
         validator_id: ValidatorId,
         highest_qc: Option<QuorumCertificate>,
         signer: &dyn hotmint_types::Signer,
     ) -> ConsensusMessage {
         let target_view = current_view.next();
-        let msg_bytes = wish_signing_bytes(target_view, highest_qc.as_ref());
+        let msg_bytes = wish_signing_bytes(chain_id_hash, target_view, highest_qc.as_ref());
         let signature = signer.sign(&msg_bytes);
         ConsensusMessage::Wish {
             target_view,
@@ -198,11 +199,14 @@ impl Pacemaker {
 }
 
 pub(crate) fn wish_signing_bytes(
+    chain_id_hash: &[u8; 32],
     target_view: ViewNumber,
     highest_qc: Option<&QuorumCertificate>,
 ) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(42);
-    buf.push(b'W');
+    let tag = b"HOTMINT_WISH_V1\0";
+    let mut buf = Vec::with_capacity(tag.len() + 32 + 8 + 42);
+    buf.extend_from_slice(tag);
+    buf.extend_from_slice(chain_id_hash);
     buf.extend_from_slice(&target_view.as_u64().to_le_bytes());
     // Bind the highest_qc to prevent replay with a different QC.
     // Canonical encoding: 0x00 = None, 0x01 + view_le + hash = Some.

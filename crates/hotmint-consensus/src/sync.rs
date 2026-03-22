@@ -30,6 +30,7 @@ pub async fn sync_to_tip(
     last_app_hash: &mut BlockHash,
     request_tx: &mpsc::Sender<SyncRequest>,
     response_rx: &mut mpsc::Receiver<SyncResponse>,
+    chain_id_hash: &[u8; 32],
 ) -> Result<()> {
     // First, get status from peer
     request_tx
@@ -102,6 +103,7 @@ pub async fn sync_to_tip(
             current_epoch,
             last_committed_height,
             last_app_hash,
+            chain_id_hash,
         )?;
 
         info!(
@@ -132,6 +134,7 @@ pub fn replay_blocks(
     current_epoch: &mut Epoch,
     last_committed_height: &mut Height,
     last_app_hash: &mut BlockHash,
+    chain_id_hash: &[u8; 32],
 ) -> Result<()> {
     for (i, (block, qc)) in blocks.iter().enumerate() {
         // Validate chain continuity
@@ -141,6 +144,19 @@ pub fn replay_blocks(
                 block.height.as_u64(),
                 blocks[i - 1].0.hash,
                 block.parent_hash
+            ));
+        }
+        // F-06: Validate first block links to our last committed block
+        if i == 0
+            && last_committed_height.as_u64() > 0
+            && let Some(last) = store.get_block_by_height(*last_committed_height)
+            && block.parent_hash != last.hash
+        {
+            return Err(eg!(
+                "sync batch first block parent {} does not match last committed block {} at height {}",
+                block.parent_hash,
+                last.hash,
+                last_committed_height
             ));
         }
 
@@ -157,6 +173,7 @@ pub fn replay_blocks(
             // Verify QC aggregate signature and quorum
             let verifier = hotmint_crypto::Ed25519Verifier;
             let qc_bytes = hotmint_types::vote::Vote::signing_bytes(
+                chain_id_hash,
                 cert.view,
                 &cert.block_hash,
                 hotmint_types::vote::VoteType::Vote,
@@ -172,13 +189,14 @@ pub fn replay_blocks(
                     block.height.as_u64()
                 ));
             }
-            if !hotmint_crypto::has_quorum(&current_epoch.validator_set, &cert.aggregate_signature) {
+            if !hotmint_crypto::has_quorum(&current_epoch.validator_set, &cert.aggregate_signature)
+            {
                 return Err(eg!(
                     "sync QC below quorum threshold at height {}",
                     block.height.as_u64()
                 ));
             }
-        } else if block.height.as_u64() > 1 {
+        } else if block.height.as_u64() > 0 {
             // Non-genesis blocks MUST have a commit QC — without one, the block
             // has not been certified by a 2/3 quorum and must be rejected.
             return Err(eg!(
@@ -275,8 +293,11 @@ mod tests {
     use crate::store::MemoryBlockStore;
     use hotmint_types::{BlockHash, QuorumCertificate, ValidatorId, ViewNumber};
 
+    const TEST_CHAIN: [u8; 32] = [0u8; 32];
+
     fn make_qc(block: &Block, signer: &hotmint_crypto::Ed25519Signer) -> QuorumCertificate {
         let vote_bytes = hotmint_types::vote::Vote::signing_bytes(
+            &TEST_CHAIN,
             block.view,
             &block.hash,
             hotmint_types::vote::VoteType::Vote,
@@ -335,6 +356,7 @@ mod tests {
             &mut epoch,
             &mut height,
             &mut app_hash,
+            &TEST_CHAIN,
         )
         .unwrap();
         assert_eq!(height, Height(3));
@@ -368,7 +390,8 @@ mod tests {
                 &app,
                 &mut epoch,
                 &mut height,
-                &mut app_hash
+                &mut app_hash,
+                &TEST_CHAIN,
             )
             .is_err()
         );
@@ -401,7 +424,8 @@ mod tests {
                 &app,
                 &mut epoch,
                 &mut height,
-                &mut app_hash
+                &mut app_hash,
+                &TEST_CHAIN,
             )
             .is_err()
         );

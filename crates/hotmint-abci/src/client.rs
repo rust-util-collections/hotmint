@@ -47,8 +47,20 @@ impl IpcApplicationClient {
         }
         let stream = guard.as_mut().unwrap();
 
-        write_frame_sync(stream, &payload).c(d!("write request frame"))?;
-        let resp_bytes = read_frame_sync(stream).c(d!("read response frame"))?;
+        let result = write_frame_sync(stream, &payload).and_then(|()| read_frame_sync(stream));
+        let resp_bytes = match result {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                // Connection broken — reset and retry once
+                *guard = None;
+                let new_stream =
+                    UnixStream::connect(&self.socket_path).c(d!("reconnect to IPC socket"))?;
+                *guard = Some(new_stream);
+                let stream = guard.as_mut().unwrap();
+                write_frame_sync(stream, &payload).c(d!("write request frame (retry)"))?;
+                read_frame_sync(stream).c(d!("read response frame (retry)"))?
+            }
+        };
         let resp = protocol::decode_response(&resp_bytes)
             .map_err(|e| eg!(e.to_string()))
             .c(d!("decode response"))?;
@@ -57,6 +69,13 @@ impl IpcApplicationClient {
 }
 
 fn write_frame_sync(w: &mut impl Write, payload: &[u8]) -> io::Result<()> {
+    const MAX_FRAME: usize = 64 * 1024 * 1024;
+    if payload.len() > MAX_FRAME {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("frame size {} exceeds max {MAX_FRAME}", payload.len()),
+        ));
+    }
     let len = payload.len() as u32;
     w.write_all(&len.to_le_bytes())?;
     w.write_all(payload)?;
@@ -107,7 +126,10 @@ impl Application for IpcApplicationClient {
                 // Reset the connection so the next call reconnects and re-syncs the
                 // framing, then reject the block so the view times out and recovers.
                 *self.conn.lock().unwrap_or_else(|p| p.into_inner()) = None;
-                tracing::error!(?other, "IPC_FAULT: unexpected response for validate_block — rejecting block");
+                tracing::error!(
+                    ?other,
+                    "IPC_FAULT: unexpected response for validate_block — rejecting block"
+                );
                 false
             }
             Err(e) => {

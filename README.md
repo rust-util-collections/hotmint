@@ -335,20 +335,22 @@ let known_addresses = vec![
     // ...
 ];
 
-let (net_service, network_sink, msg_rx, sync_req_rx, sync_resp_rx, peer_info_rx, connected_count_rx) =
-    NetworkService::create(
-        "/ip4/0.0.0.0/tcp/26656".parse().unwrap(),
-        peer_map,
-        known_addresses,
-        None,
-        peer_book,
-        pex_config,
-    ).unwrap();
+let handles = NetworkService::create(
+    "/ip4/0.0.0.0/tcp/26656".parse().unwrap(),
+    peer_map,
+    known_addresses,
+    None,          // keypair (auto-generated if None)
+    peer_book,
+    pex_config,
+    true,          // relay_consensus
+    initial_validators,
+    chain_id_hash,
+).unwrap();
 
 // run the network event loop in background
-tokio::spawn(async move { net_service.run().await });
+tokio::spawn(async move { handles.service.run().await });
 
-// pass network_sink and msg_rx to ConsensusEngine::new(...)
+// pass handles.sink and handles.msg_rx to ConsensusEngine
 ```
 
 📖 **[Networking guide →](docs/networking.md)**

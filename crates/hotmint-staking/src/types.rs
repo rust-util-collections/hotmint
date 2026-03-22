@@ -94,6 +94,28 @@ pub struct StakingConfig {
     pub unbonding_period: u64,
 }
 
+impl StakingConfig {
+    pub fn validate(&self) -> ruc::Result<()> {
+        if self.max_validators == 0 {
+            return Err(ruc::eg!("max_validators must be > 0"));
+        }
+        if self.slash_rate_double_sign > 10_000 {
+            return Err(ruc::eg!(
+                "slash_rate_double_sign must be <= 10000 (basis points)"
+            ));
+        }
+        if self.slash_rate_downtime > 10_000 {
+            return Err(ruc::eg!(
+                "slash_rate_downtime must be <= 10000 (basis points)"
+            ));
+        }
+        if self.initial_score > self.max_score {
+            return Err(ruc::eg!("initial_score must be <= max_score"));
+        }
+        Ok(())
+    }
+}
+
 impl Default for StakingConfig {
     fn default() -> Self {
         Self {

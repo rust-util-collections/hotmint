@@ -1,7 +1,9 @@
 use ruc::*;
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use tokio::sync::RwLock;
 
 use crate::application::Application;
 use crate::commit::try_commit;
@@ -152,7 +154,10 @@ impl ConsensusEngineBuilder {
         self
     }
 
-    pub fn messages(mut self, msg_rx: mpsc::Receiver<(Option<ValidatorId>, ConsensusMessage)>) -> Self {
+    pub fn messages(
+        mut self,
+        msg_rx: mpsc::Receiver<(Option<ValidatorId>, ConsensusMessage)>,
+    ) -> Self {
         self.msg_rx = Some(msg_rx);
         self
     }
@@ -238,7 +243,7 @@ impl ConsensusEngine {
     /// If persisted state was restored (current_view > 1), skip genesis bootstrap.
     pub async fn run(mut self) {
         if self.state.current_view.as_u64() <= 1 {
-            self.enter_genesis_view();
+            self.enter_genesis_view().await;
         } else {
             info!(
                 validator = %self.state.validator_id,
@@ -255,18 +260,18 @@ impl ConsensusEngine {
 
             tokio::select! {
                 Some((sender, msg)) = self.msg_rx.recv() => {
-                    if let Err(e) = self.handle_message(sender, msg) {
+                    if let Err(e) = self.handle_message(sender, msg).await {
                         warn!(validator = %self.state.validator_id, error = %e, "error handling message");
                     }
                 }
                 _ = &mut deadline => {
-                    self.handle_timeout();
+                    self.handle_timeout().await;
                 }
             }
         }
     }
 
-    fn enter_genesis_view(&mut self) {
+    async fn enter_genesis_view(&mut self) {
         // Create a synthetic genesis QC so the first leader can propose
         let genesis_qc = QuorumCertificate {
             block_hash: BlockHash::GENESIS,
@@ -291,36 +296,45 @@ impl ConsensusEngine {
         if self.state.is_leader() {
             self.state.step = ViewStep::WaitingForStatus;
             // In genesis, skip status wait — propose directly
-            self.try_propose();
+            self.try_propose().await;
         }
     }
 
-    fn try_propose(&mut self) {
-        let mut store = self.store.write().unwrap();
-        match view_protocol::propose(
-            &mut self.state,
-            store.as_mut(),
-            self.network.as_ref(),
-            self.app.as_ref(),
-            self.signer.as_ref(),
-        ) {
-            Ok(block) => {
-                drop(store);
-                // Leader votes for its own block
-                self.leader_self_vote(block.hash);
+    fn try_propose(
+        &mut self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            let mut store = self.store.write().await;
+            match view_protocol::propose(
+                &mut self.state,
+                store.as_mut(),
+                self.network.as_ref(),
+                self.app.as_ref(),
+                self.signer.as_ref(),
+            ) {
+                Ok(block) => {
+                    drop(store);
+                    // Leader votes for its own block
+                    self.leader_self_vote(block.hash).await;
+                }
+                Err(e) => {
+                    warn!(
+                        validator = %self.state.validator_id,
+                        error = %e,
+                        "failed to propose"
+                    );
+                }
             }
-            Err(e) => {
-                warn!(
-                    validator = %self.state.validator_id,
-                    error = %e,
-                    "failed to propose"
-                );
-            }
-        }
+        })
     }
 
-    fn leader_self_vote(&mut self, block_hash: BlockHash) {
-        let vote_bytes = Vote::signing_bytes(self.state.current_view, &block_hash, VoteType::Vote);
+    async fn leader_self_vote(&mut self, block_hash: BlockHash) {
+        let vote_bytes = Vote::signing_bytes(
+            &self.state.chain_id_hash,
+            self.state.current_view,
+            &block_hash,
+            VoteType::Vote,
+        );
         let signature = self.signer.sign(&vote_bytes);
         let vote = Vote {
             block_hash,
@@ -336,7 +350,7 @@ impl ConsensusEngine {
             Ok(result) => {
                 self.handle_equivocation(&result);
                 if let Some(qc) = result.qc {
-                    self.on_qc_formed(qc);
+                    self.on_qc_formed(qc).await;
                 }
             }
             Err(e) => warn!(error = %e, "failed to add self vote"),
@@ -365,10 +379,11 @@ pub fn verify_relay_sender(
     msg: &ConsensusMessage,
     validator_keys: &HashMap<ValidatorId, hotmint_types::crypto::PublicKey>,
     ordered_validators: &[ValidatorId],
+    chain_id_hash: &[u8; 32],
 ) -> bool {
     use hotmint_crypto::Ed25519Verifier;
-    use hotmint_types::vote::Vote;
     use hotmint_types::Verifier;
+    use hotmint_types::vote::Vote;
     let verifier = Ed25519Verifier;
     match msg {
         ConsensusMessage::Propose {
@@ -380,14 +395,15 @@ pub fn verify_relay_sender(
             let Some(pk) = validator_keys.get(&block.proposer) else {
                 return false;
             };
-            let bytes = crate::view_protocol::proposal_signing_bytes(block, justify);
+            let bytes = crate::view_protocol::proposal_signing_bytes(chain_id_hash, block, justify);
             Verifier::verify(&verifier, pk, &bytes, signature)
         }
         ConsensusMessage::VoteMsg(vote) | ConsensusMessage::Vote2Msg(vote) => {
             let Some(pk) = validator_keys.get(&vote.validator) else {
                 return false;
             };
-            let bytes = Vote::signing_bytes(vote.view, &vote.block_hash, vote.vote_type);
+            let bytes =
+                Vote::signing_bytes(chain_id_hash, vote.view, &vote.block_hash, vote.vote_type);
             Verifier::verify(&verifier, pk, &bytes, &vote.signature)
         }
         ConsensusMessage::Prepare {
@@ -398,8 +414,7 @@ pub fn verify_relay_sender(
             // sender is the leader for this view, then check the signature.
             if !ordered_validators.is_empty() {
                 let n = ordered_validators.len();
-                let expected_leader =
-                    ordered_validators[certificate.view.as_u64() as usize % n];
+                let expected_leader = ordered_validators[certificate.view.as_u64() as usize % n];
                 if sender != expected_leader {
                     return false;
                 }
@@ -407,7 +422,7 @@ pub fn verify_relay_sender(
             let Some(pk) = validator_keys.get(&sender) else {
                 return false;
             };
-            let bytes = crate::view_protocol::prepare_signing_bytes(certificate);
+            let bytes = crate::view_protocol::prepare_signing_bytes(chain_id_hash, certificate);
             Verifier::verify(&verifier, pk, &bytes, signature)
         }
         ConsensusMessage::Wish {
@@ -419,12 +434,76 @@ pub fn verify_relay_sender(
             let Some(pk) = validator_keys.get(validator) else {
                 return false;
             };
-            let bytes = crate::pacemaker::wish_signing_bytes(*target_view, highest_qc.as_ref());
+            let bytes = crate::pacemaker::wish_signing_bytes(
+                chain_id_hash,
+                *target_view,
+                highest_qc.as_ref(),
+            );
             Verifier::verify(&verifier, pk, &bytes, signature)
         }
-        // TimeoutCert: aggregate signature — engine verifies with full ValidatorSet.
-        // StatusCert: signing bytes need current_view — engine verifies.
-        ConsensusMessage::TimeoutCert(_) | ConsensusMessage::StatusCert { .. } => true,
+        ConsensusMessage::TimeoutCert(tc) => {
+            // Full relay verification: verify each signer's signature + quorum check.
+            let target_view = ViewNumber(tc.view.as_u64() + 1);
+            let n = ordered_validators.len();
+            if n == 0 || tc.aggregate_signature.signers.len() != n {
+                return false;
+            }
+            let mut sig_idx = 0usize;
+            let mut verified_count = 0usize;
+            for (i, &signed) in tc.aggregate_signature.signers.iter().enumerate() {
+                if !signed {
+                    continue;
+                }
+                if i >= n {
+                    return false;
+                }
+                let vid = ordered_validators[i];
+                let Some(pk) = validator_keys.get(&vid) else {
+                    return false;
+                };
+                let hqc = tc.highest_qcs.get(i).and_then(|h| h.as_ref());
+                let bytes = crate::pacemaker::wish_signing_bytes(chain_id_hash, target_view, hqc);
+                if sig_idx >= tc.aggregate_signature.signatures.len() {
+                    return false;
+                }
+                if !Verifier::verify(
+                    &verifier,
+                    pk,
+                    &bytes,
+                    &tc.aggregate_signature.signatures[sig_idx],
+                ) {
+                    return false;
+                }
+                sig_idx += 1;
+                verified_count += 1;
+            }
+            if sig_idx != tc.aggregate_signature.signatures.len() {
+                return false;
+            }
+            // Quorum check: require > 2/3 of validators (by count, not power —
+            // full power-based check is done in engine::verify_message).
+            verified_count * 3 > n * 2
+        }
+        ConsensusMessage::StatusCert {
+            validator,
+            signature,
+            locked_qc,
+            ..
+        } => {
+            // StatusCert signing bytes require current_view which we don't have
+            // in the relay context. Verify the sender is a known validator and
+            // the signature is over *some* plausible view (the TC view is not
+            // available here). The engine does full verification with correct view.
+            // At minimum, reject unknown validators.
+            let Some(pk) = validator_keys.get(validator) else {
+                return false;
+            };
+            // We cannot construct exact signing bytes without knowing current_view,
+            // so we accept from known validators only. The engine's verify_message
+            // will do full cryptographic verification.
+            let _ = (pk, signature, locked_qc);
+            true
+        }
     }
 }
 
@@ -464,15 +543,23 @@ impl ConsensusEngine {
                     warn!(proposer = %block.proposer, "propose from unknown validator");
                     return false;
                 };
-                let bytes = view_protocol::proposal_signing_bytes(block, justify);
+                let bytes = view_protocol::proposal_signing_bytes(
+                    &self.state.chain_id_hash,
+                    block,
+                    justify,
+                );
                 if !self.verifier.verify(&vi.public_key, &bytes, signature) {
                     warn!(proposer = %block.proposer, "invalid proposal signature");
                     return false;
                 }
                 // Verify justify QC aggregate signature (skip genesis QC which has no signers)
                 if justify.aggregate_signature.count() > 0 {
-                    let qc_bytes =
-                        Vote::signing_bytes(justify.view, &justify.block_hash, VoteType::Vote);
+                    let qc_bytes = Vote::signing_bytes(
+                        &self.state.chain_id_hash,
+                        justify.view,
+                        &justify.block_hash,
+                        VoteType::Vote,
+                    );
                     if !self
                         .verifier
                         .verify_aggregate(vs, &qc_bytes, &justify.aggregate_signature)
@@ -492,7 +579,12 @@ impl ConsensusEngine {
                     warn!(validator = %vote.validator, "vote from unknown validator");
                     return false;
                 };
-                let bytes = Vote::signing_bytes(vote.view, &vote.block_hash, vote.vote_type);
+                let bytes = Vote::signing_bytes(
+                    &self.state.chain_id_hash,
+                    vote.view,
+                    &vote.block_hash,
+                    vote.vote_type,
+                );
                 if !self
                     .verifier
                     .verify(&vi.public_key, &bytes, &vote.signature)
@@ -507,15 +599,22 @@ impl ConsensusEngine {
                 signature,
             } => {
                 // Verify the leader's signature on the prepare message
-                let leader = vs.leader_for_view(certificate.view);
-                let bytes = view_protocol::prepare_signing_bytes(certificate);
+                let Some(leader) = vs.leader_for_view(certificate.view) else {
+                    return false;
+                };
+                let bytes =
+                    view_protocol::prepare_signing_bytes(&self.state.chain_id_hash, certificate);
                 if !self.verifier.verify(&leader.public_key, &bytes, signature) {
                     warn!(view = %certificate.view, "invalid prepare signature");
                     return false;
                 }
                 // Also verify the QC's aggregate signature and quorum
-                let qc_bytes =
-                    Vote::signing_bytes(certificate.view, &certificate.block_hash, VoteType::Vote);
+                let qc_bytes = Vote::signing_bytes(
+                    &self.state.chain_id_hash,
+                    certificate.view,
+                    &certificate.block_hash,
+                    VoteType::Vote,
+                );
                 if !self
                     .verifier
                     .verify_aggregate(vs, &qc_bytes, &certificate.aggregate_signature)
@@ -540,7 +639,11 @@ impl ConsensusEngine {
                     return false;
                 };
                 // Signing bytes bind both target_view and highest_qc to prevent replay.
-                let bytes = crate::pacemaker::wish_signing_bytes(*target_view, highest_qc.as_ref());
+                let bytes = crate::pacemaker::wish_signing_bytes(
+                    &self.state.chain_id_hash,
+                    *target_view,
+                    highest_qc.as_ref(),
+                );
                 if !self.verifier.verify(&vi.public_key, &bytes, signature) {
                     warn!(validator = %validator, "invalid wish signature");
                     return false;
@@ -570,15 +673,20 @@ impl ConsensusEngine {
                         return false;
                     };
                     let hqc = tc.highest_qcs.get(i).and_then(|h| h.as_ref());
-                    let bytes = crate::pacemaker::wish_signing_bytes(target_view, hqc);
+                    let bytes = crate::pacemaker::wish_signing_bytes(
+                        &self.state.chain_id_hash,
+                        target_view,
+                        hqc,
+                    );
                     if sig_idx >= tc.aggregate_signature.signatures.len() {
                         warn!(view = %tc.view, "TC aggregate_signature has fewer sigs than signers");
                         return false;
                     }
-                    if !self
-                        .verifier
-                        .verify(&vi.public_key, &bytes, &tc.aggregate_signature.signatures[sig_idx])
-                    {
+                    if !self.verifier.verify(
+                        &vi.public_key,
+                        &bytes,
+                        &tc.aggregate_signature.signatures[sig_idx],
+                    ) {
                         warn!(view = %tc.view, validator = %vi.id, "TC signer signature invalid");
                         return false;
                     }
@@ -604,7 +712,11 @@ impl ConsensusEngine {
                     warn!(validator = %validator, "status from unknown validator");
                     return false;
                 };
-                let bytes = view_protocol::status_signing_bytes(self.state.current_view, locked_qc);
+                let bytes = view_protocol::status_signing_bytes(
+                    &self.state.chain_id_hash,
+                    self.state.current_view,
+                    locked_qc,
+                );
                 if !self.verifier.verify(&vi.public_key, &bytes, signature) {
                     warn!(validator = %validator, "invalid status signature");
                     return false;
@@ -614,7 +726,11 @@ impl ConsensusEngine {
         }
     }
 
-    fn handle_message(&mut self, _sender: Option<ValidatorId>, msg: ConsensusMessage) -> Result<()> {
+    async fn handle_message(
+        &mut self,
+        _sender: Option<ValidatorId>,
+        msg: ConsensusMessage,
+    ) -> Result<()> {
         if !self.verify_message(&msg) {
             return Ok(());
         }
@@ -638,9 +754,10 @@ impl ConsensusEngine {
                         }
 
                         // Fast-forward via double cert
-                        self.apply_commit(dc, "fast-forward");
+                        self.apply_commit(dc, "fast-forward").await;
                         self.state.highest_double_cert = Some(dc.clone());
-                        self.advance_view_to(block.view, ViewEntryTrigger::DoubleCert(dc.clone()));
+                        self.advance_view_to(block.view, ViewEntryTrigger::DoubleCert(dc.clone()))
+                            .await;
                     } else {
                         return Ok(());
                     }
@@ -654,14 +771,14 @@ impl ConsensusEngine {
                         // Verify block hash before storing past-view blocks
                         let expected = hotmint_crypto::compute_block_hash(&block);
                         if block.hash == expected {
-                            let mut store = self.store.write().unwrap();
+                            let mut store = self.store.write().await;
                             store.put_block(block);
                         }
                     }
                     return Ok(());
                 }
 
-                let mut store = self.store.write().unwrap();
+                let mut store = self.store.write().await;
 
                 // R-25: verify any DoubleCert in the same-view proposal path.
                 // The future-view path already calls validate_double_cert; the same-view path
@@ -723,7 +840,7 @@ impl ConsensusEngine {
                     .c(d!())?;
                 self.handle_equivocation(&result);
                 if let Some(qc) = result.qc {
-                    self.on_qc_formed(qc);
+                    self.on_qc_formed(qc).await;
                 }
             }
 
@@ -740,7 +857,7 @@ impl ConsensusEngine {
                     // our local state. When the block is absent (node caught up via TC),
                     // we defer to the QC's 2f+1 signatures for safety.
                     if self.app.tracks_app_hash() {
-                        let store = self.store.read().unwrap();
+                        let store = self.store.read().await;
                         if let Some(block) = store.get_block(&certificate.block_hash) {
                             if block.app_hash != self.state.last_app_hash {
                                 warn!(
@@ -762,9 +879,6 @@ impl ConsensusEngine {
             }
 
             ConsensusMessage::Vote2Msg(vote) => {
-                if vote.vote_type != VoteType::Vote2 {
-                    return Ok(());
-                }
                 if vote.view != self.state.current_view {
                     return Ok(());
                 }
@@ -774,7 +888,7 @@ impl ConsensusEngine {
                     .c(d!())?;
                 self.handle_equivocation(&result);
                 if let Some(outer_qc) = result.qc {
-                    self.on_double_cert_formed(outer_qc);
+                    self.on_double_cert_formed(outer_qc).await;
                 }
             }
 
@@ -789,7 +903,12 @@ impl ConsensusEngine {
                 if let Some(ref qc) = highest_qc
                     && qc.aggregate_signature.count() > 0
                 {
-                    let qc_bytes = Vote::signing_bytes(qc.view, &qc.block_hash, VoteType::Vote);
+                    let qc_bytes = Vote::signing_bytes(
+                        &self.state.chain_id_hash,
+                        qc.view,
+                        &qc.block_hash,
+                        VoteType::Vote,
+                    );
                     if !self.verifier.verify_aggregate(
                         &self.state.validator_set,
                         &qc_bytes,
@@ -798,7 +917,10 @@ impl ConsensusEngine {
                         warn!(validator = %validator, "wish carries invalid highest_qc signature");
                         return Ok(());
                     }
-                    if !hotmint_crypto::has_quorum(&self.state.validator_set, &qc.aggregate_signature) {
+                    if !hotmint_crypto::has_quorum(
+                        &self.state.validator_set,
+                        &qc.aggregate_signature,
+                    ) {
                         warn!(validator = %validator, "wish carries highest_qc without quorum");
                         return Ok(());
                     }
@@ -818,7 +940,7 @@ impl ConsensusEngine {
                     );
                     self.network
                         .broadcast(ConsensusMessage::TimeoutCert(tc.clone()));
-                    self.advance_view(ViewEntryTrigger::TimeoutCert(tc));
+                    self.advance_view(ViewEntryTrigger::TimeoutCert(tc)).await;
                 }
             }
 
@@ -829,7 +951,7 @@ impl ConsensusEngine {
                 }
                 let new_view = ViewNumber(tc.view.as_u64() + 1);
                 if new_view > self.state.current_view {
-                    self.advance_view(ViewEntryTrigger::TimeoutCert(tc));
+                    self.advance_view(ViewEntryTrigger::TimeoutCert(tc)).await;
                 }
             }
 
@@ -852,7 +974,7 @@ impl ConsensusEngine {
                     let total_power =
                         status_power + self.state.validator_set.power_of(self.state.validator_id);
                     if total_power >= self.state.validator_set.quorum_threshold() {
-                        self.try_propose();
+                        self.try_propose().await;
                     }
                 }
             }
@@ -873,7 +995,7 @@ impl ConsensusEngine {
         }
     }
 
-    fn on_qc_formed(&mut self, qc: QuorumCertificate) {
+    async fn on_qc_formed(&mut self, qc: QuorumCertificate) {
         // Save the QC so we can reliably pair it when forming a DoubleCert
         self.current_view_qc = Some(qc.clone());
 
@@ -885,8 +1007,12 @@ impl ConsensusEngine {
         );
 
         // Leader also does vote2 for its own prepare (self-vote for step 5)
-        let vote_bytes =
-            Vote::signing_bytes(self.state.current_view, &qc.block_hash, VoteType::Vote2);
+        let vote_bytes = Vote::signing_bytes(
+            &self.state.chain_id_hash,
+            self.state.current_view,
+            &qc.block_hash,
+            VoteType::Vote2,
+        );
         let signature = self.signer.sign(&vote_bytes);
         let vote = Vote {
             block_hash: qc.block_hash,
@@ -910,7 +1036,7 @@ impl ConsensusEngine {
                 Ok(result) => {
                     self.handle_equivocation(&result);
                     if let Some(outer_qc) = result.qc {
-                        self.on_double_cert_formed(outer_qc);
+                        self.on_double_cert_formed(outer_qc).await;
                     }
                 }
                 Err(e) => warn!(error = %e, "failed to add self vote2"),
@@ -921,7 +1047,7 @@ impl ConsensusEngine {
         }
     }
 
-    fn on_double_cert_formed(&mut self, outer_qc: QuorumCertificate) {
+    async fn on_double_cert_formed(&mut self, outer_qc: QuorumCertificate) {
         // Use the QC we explicitly saved from this view's first voting round
         let inner_qc = match self.current_view_qc.take() {
             Some(qc) if qc.block_hash == outer_qc.block_hash => qc,
@@ -953,15 +1079,15 @@ impl ConsensusEngine {
         );
 
         // Commit
-        self.apply_commit(&dc, "double-cert");
+        self.apply_commit(&dc, "double-cert").await;
 
         self.state.highest_double_cert = Some(dc.clone());
 
         // Advance to next view — as new leader, include DC in proposal
-        self.advance_view(ViewEntryTrigger::DoubleCert(dc));
+        self.advance_view(ViewEntryTrigger::DoubleCert(dc)).await;
     }
 
-    fn handle_timeout(&mut self) {
+    async fn handle_timeout(&mut self) {
         // Skip wish building/signing entirely when we have no voting power (fullnodes).
         // build_wish involves a cryptographic signing operation that serves no purpose
         // when the wish will never be broadcast or counted toward a TC.
@@ -978,6 +1104,7 @@ impl ConsensusEngine {
         );
 
         let wish = self.pacemaker.build_wish(
+            &self.state.chain_id_hash,
             self.state.current_view,
             self.state.validator_id,
             self.state.highest_qc.clone(),
@@ -1003,7 +1130,7 @@ impl ConsensusEngine {
         {
             self.network
                 .broadcast(ConsensusMessage::TimeoutCert(tc.clone()));
-            self.advance_view(ViewEntryTrigger::TimeoutCert(tc));
+            self.advance_view(ViewEntryTrigger::TimeoutCert(tc)).await;
             return;
         }
 
@@ -1013,8 +1140,8 @@ impl ConsensusEngine {
 
     /// Apply the result of a successful try_commit: update app_hash, pending epoch,
     /// store commit QCs, and flush. Called from both normal and fast-forward commit paths.
-    fn apply_commit(&mut self, dc: &DoubleCertificate, context: &str) {
-        let store = self.store.read().unwrap();
+    async fn apply_commit(&mut self, dc: &DoubleCertificate, context: &str) {
+        let store = self.store.read().await;
         match try_commit(
             dc,
             store.as_ref(),
@@ -1031,7 +1158,7 @@ impl ConsensusEngine {
                 }
                 drop(store);
                 {
-                    let mut s = self.store.write().unwrap();
+                    let mut s = self.store.write().await;
                     for block in &result.committed_blocks {
                         // R-28: only write the commit QC for the block it actually certifies.
                         // Ancestor blocks committed via the chain rule may get their QC stored
@@ -1070,11 +1197,15 @@ impl ConsensusEngine {
         }
         let vs = &self.state.validator_set;
         let inner_bytes = Vote::signing_bytes(
+            &self.state.chain_id_hash,
             dc.inner_qc.view,
             &dc.inner_qc.block_hash,
             VoteType::Vote,
         );
-        if !self.verifier.verify_aggregate(vs, &inner_bytes, &dc.inner_qc.aggregate_signature) {
+        if !self
+            .verifier
+            .verify_aggregate(vs, &inner_bytes, &dc.inner_qc.aggregate_signature)
+        {
             warn!("double cert inner QC signature invalid");
             return false;
         }
@@ -1083,11 +1214,15 @@ impl ConsensusEngine {
             return false;
         }
         let outer_bytes = Vote::signing_bytes(
+            &self.state.chain_id_hash,
             dc.outer_qc.view,
             &dc.outer_qc.block_hash,
             VoteType::Vote2,
         );
-        if !self.verifier.verify_aggregate(vs, &outer_bytes, &dc.outer_qc.aggregate_signature) {
+        if !self
+            .verifier
+            .verify_aggregate(vs, &outer_bytes, &dc.outer_qc.aggregate_signature)
+        {
             warn!("double cert outer QC signature invalid");
             return false;
         }
@@ -1114,16 +1249,16 @@ impl ConsensusEngine {
         }
     }
 
-    fn advance_view(&mut self, trigger: ViewEntryTrigger) {
+    async fn advance_view(&mut self, trigger: ViewEntryTrigger) {
         let new_view = match &trigger {
             ViewEntryTrigger::DoubleCert(_) => self.state.current_view.next(),
             ViewEntryTrigger::TimeoutCert(tc) => ViewNumber(tc.view.as_u64() + 1),
             ViewEntryTrigger::Genesis => ViewNumber(1),
         };
-        self.advance_view_to(new_view, trigger);
+        self.advance_view_to(new_view, trigger).await;
     }
 
-    fn advance_view_to(&mut self, new_view: ViewNumber, trigger: ViewEntryTrigger) {
+    async fn advance_view_to(&mut self, new_view: ViewNumber, trigger: ViewEntryTrigger) {
         if new_view <= self.state.current_view {
             return;
         }
@@ -1134,6 +1269,7 @@ impl ConsensusEngine {
         self.vote_collector.clear_view(self.state.current_view);
         self.vote_collector.prune_before(self.state.current_view);
         self.pacemaker.clear_view(self.state.current_view);
+        self.pacemaker.prune_before(self.state.current_view);
         self.status_senders.clear();
         self.current_view_qc = None;
 
@@ -1183,7 +1319,7 @@ impl ConsensusEngine {
         // propose path is required for liveness across epoch transitions where
         // cross-epoch verification complexity can stall status collection.
         if self.state.is_leader() && self.state.step == ViewStep::WaitingForStatus {
-            self.try_propose();
+            self.try_propose().await;
         }
     }
 }
@@ -1196,14 +1332,16 @@ impl ConsensusEngine {
 mod tests {
     use super::*;
 
-    use std::sync::{Arc, RwLock};
+    use std::sync::Arc;
+
+    use tokio::sync::RwLock;
 
     use hotmint_crypto::{Ed25519Signer, Ed25519Verifier};
+    use hotmint_types::Signer as SignerTrait;
     use hotmint_types::certificate::QuorumCertificate;
     use hotmint_types::crypto::AggregateSignature;
     use hotmint_types::validator::{ValidatorId, ValidatorInfo};
     use hotmint_types::vote::{Vote, VoteType};
-    use hotmint_types::Signer as SignerTrait;
     use tokio::sync::mpsc;
 
     use crate::application::NoopApplication;
@@ -1218,12 +1356,22 @@ mod tests {
         fn send_to(&self, _: ValidatorId, _: ConsensusMessage) {}
     }
 
+    /// Default chain_id_hash for tests — matches ConsensusState::new() which uses chain_id = "".
+    fn test_chain_id_hash() -> [u8; 32] {
+        *blake3::hash(b"").as_bytes()
+    }
+
     fn make_validator_set_4() -> (ValidatorSet, Vec<Ed25519Signer>) {
-        let signers: Vec<Ed25519Signer> =
-            (0..4).map(|i| Ed25519Signer::generate(ValidatorId(i))).collect();
+        let signers: Vec<Ed25519Signer> = (0..4)
+            .map(|i| Ed25519Signer::generate(ValidatorId(i)))
+            .collect();
         let infos: Vec<ValidatorInfo> = signers
             .iter()
-            .map(|s| ValidatorInfo { id: s.validator_id(), public_key: s.public_key(), power: 1 })
+            .map(|s| ValidatorInfo {
+                id: s.validator_id(),
+                public_key: s.public_key(),
+                power: 1,
+            })
             .collect();
         (ValidatorSet::new(infos), signers)
     }
@@ -1232,7 +1380,10 @@ mod tests {
         vid: ValidatorId,
         vs: ValidatorSet,
         signer: Ed25519Signer,
-    ) -> (ConsensusEngine, mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>) {
+    ) -> (
+        ConsensusEngine,
+        mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>,
+    ) {
         let (tx, rx) = mpsc::channel(64);
         let store = Arc::new(RwLock::new(
             Box::new(MemoryBlockStore::new()) as Box<dyn crate::store::BlockStore>
@@ -1265,12 +1416,18 @@ mod tests {
         let (engine, _tx) = make_test_engine(ValidatorId(0), vs.clone(), engine_signer);
 
         // Build a justify QC signed by exactly 1 of 4 validators — below 2f+1 = 3.
+        let chain_id_hash = test_chain_id_hash();
         let hash = BlockHash::GENESIS;
         let qc_view = ViewNumber::GENESIS;
-        let vote_bytes = Vote::signing_bytes(qc_view, &hash, VoteType::Vote);
+        let vote_bytes = Vote::signing_bytes(&chain_id_hash, qc_view, &hash, VoteType::Vote);
         let mut agg = AggregateSignature::new(4);
-        agg.add(1, SignerTrait::sign(&signers[1], &vote_bytes)).unwrap();
-        let sub_quorum_qc = QuorumCertificate { block_hash: hash, view: qc_view, aggregate_signature: agg };
+        agg.add(1, SignerTrait::sign(&signers[1], &vote_bytes))
+            .unwrap();
+        let sub_quorum_qc = QuorumCertificate {
+            block_hash: hash,
+            view: qc_view,
+            aggregate_signature: agg,
+        };
 
         // Construct a proposal from V1 carrying this sub-quorum justify.
         let mut block = Block::genesis();
@@ -1278,7 +1435,8 @@ mod tests {
         block.view = ViewNumber(1);
         block.proposer = ValidatorId(1);
         block.hash = block.compute_hash();
-        let proposal_bytes = crate::view_protocol::proposal_signing_bytes(&block, &sub_quorum_qc);
+        let proposal_bytes =
+            crate::view_protocol::proposal_signing_bytes(&chain_id_hash, &block, &sub_quorum_qc);
         let signature = SignerTrait::sign(&signers[1], &proposal_bytes);
 
         let msg = ConsensusMessage::Propose {
@@ -1301,22 +1459,28 @@ mod tests {
         let engine_signer = Ed25519Signer::generate(ValidatorId(0));
         let (engine, _tx) = make_test_engine(ValidatorId(0), vs.clone(), engine_signer);
 
+        let chain_id_hash = test_chain_id_hash();
         let hash = BlockHash::GENESIS;
         let qc_view = ViewNumber::GENESIS;
-        let vote_bytes = Vote::signing_bytes(qc_view, &hash, VoteType::Vote);
+        let vote_bytes = Vote::signing_bytes(&chain_id_hash, qc_view, &hash, VoteType::Vote);
         // 3 of 4 signers — meets 2f+1 threshold.
         let mut agg = AggregateSignature::new(4);
         for (i, signer) in signers.iter().take(3).enumerate() {
             agg.add(i, SignerTrait::sign(signer, &vote_bytes)).unwrap();
         }
-        let full_quorum_qc = QuorumCertificate { block_hash: hash, view: qc_view, aggregate_signature: agg };
+        let full_quorum_qc = QuorumCertificate {
+            block_hash: hash,
+            view: qc_view,
+            aggregate_signature: agg,
+        };
 
         let mut block = Block::genesis();
         block.height = Height(1);
         block.view = ViewNumber(1);
         block.proposer = ValidatorId(1);
         block.hash = block.compute_hash();
-        let proposal_bytes = crate::view_protocol::proposal_signing_bytes(&block, &full_quorum_qc);
+        let proposal_bytes =
+            crate::view_protocol::proposal_signing_bytes(&chain_id_hash, &block, &full_quorum_qc);
         let signature = SignerTrait::sign(&signers[1], &proposal_bytes);
 
         let msg = ConsensusMessage::Propose {
@@ -1343,13 +1507,15 @@ mod tests {
     fn r32_sub_quorum_highest_qc_fails_has_quorum() {
         let (vs, signers) = make_validator_set_4();
 
+        let chain_id_hash = test_chain_id_hash();
         let hash = BlockHash([1u8; 32]);
         let qc_view = ViewNumber(1);
-        let vote_bytes = Vote::signing_bytes(qc_view, &hash, VoteType::Vote);
+        let vote_bytes = Vote::signing_bytes(&chain_id_hash, qc_view, &hash, VoteType::Vote);
 
         // Build a QC with only 1 signer — sub-quorum.
         let mut agg = AggregateSignature::new(4);
-        agg.add(0, SignerTrait::sign(&signers[0], &vote_bytes)).unwrap();
+        agg.add(0, SignerTrait::sign(&signers[0], &vote_bytes))
+            .unwrap();
 
         assert!(
             !hotmint_crypto::has_quorum(&vs, &agg),
@@ -1359,7 +1525,9 @@ mod tests {
         // Build a QC with 3 signers — full quorum.
         let mut agg_full = AggregateSignature::new(4);
         for (i, signer) in signers.iter().take(3).enumerate() {
-            agg_full.add(i, SignerTrait::sign(signer, &vote_bytes)).unwrap();
+            agg_full
+                .add(i, SignerTrait::sign(signer, &vote_bytes))
+                .unwrap();
         }
         assert!(
             hotmint_crypto::has_quorum(&vs, &agg_full),

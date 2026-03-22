@@ -89,7 +89,9 @@ impl PeerBook {
 
     pub fn save(&self) -> Result<()> {
         let contents = serde_json::to_string_pretty(&self.peers).c(d!("serialize peer book"))?;
-        fs::write(&self.path, contents).c(d!("write peer book"))
+        let tmp = format!("{}.tmp", self.path.display());
+        fs::write(&tmp, &contents).c(d!("write peer book tmp"))?;
+        fs::rename(&tmp, &self.path).c(d!("rename peer book tmp"))
     }
 
     pub fn add_peer(&mut self, info: PeerInfo) {
@@ -126,7 +128,7 @@ impl PeerBook {
 
     pub fn adjust_score(&mut self, peer_id: &str, delta: i32) {
         if let Some(peer) = self.peers.get_mut(peer_id) {
-            peer.score = peer.score.saturating_add(delta);
+            peer.score = peer.score.saturating_add(delta).min(100);
         }
     }
 

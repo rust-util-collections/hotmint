@@ -74,7 +74,7 @@ fn bench_aggregate_verify(c: &mut Criterion) {
         .iter()
         .take(67)
         .map(|s| {
-            let bytes = Vote::signing_bytes(view, &hash, VoteType::Vote);
+            let bytes = Vote::signing_bytes(&[0u8; 32], view, &hash, VoteType::Vote);
             Vote {
                 block_hash: hash,
                 view,

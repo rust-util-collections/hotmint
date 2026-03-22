@@ -80,7 +80,10 @@ fn generate_config(
     persistent_peers: &[String],
     bind_ip: &str,
 ) -> String {
-    let peers_toml: Vec<String> = persistent_peers.iter().map(|p| format!("\"{}\"", p)).collect();
+    let peers_toml: Vec<String> = persistent_peers
+        .iter()
+        .map(|p| format!("\"{}\"", p))
+        .collect();
     let peers_str = peers_toml.join(", ");
 
     format!(
@@ -168,21 +171,16 @@ pub fn init_cluster(
             })
             .collect(),
     };
-    let genesis_json =
-        serde_json::to_string_pretty(&genesis).c(d!("serialize genesis"))?;
+    let genesis_json = serde_json::to_string_pretty(&genesis).c(d!("serialize genesis"))?;
 
     // Build persistent_peers list: "id@/ip4/<ip>/tcp/<port>"
-    let persistent_peers: Vec<String> = keys
-        .iter()
-        .map(|(id, _, _, _)| {
-            format!(
-                "{}@/ip4/{}/tcp/{}",
-                id,
-                bind_ip,
-                p2p_base_port + *id as u16,
-            )
-        })
-        .collect();
+    let mut persistent_peers: Vec<String> = Vec::with_capacity(keys.len());
+    for (id, _, _, _) in &keys {
+        let port = p2p_base_port
+            .checked_add(*id as u16)
+            .ok_or_else(|| eg!("port calculation overflow"))?;
+        persistent_peers.push(format!("{}@/ip4/{}/tcp/{}", id, bind_ip, port));
+    }
 
     // Create per-validator home directories
     let mut entries = Vec::new();
@@ -198,8 +196,7 @@ pub fn init_cluster(
             private_key: sk_hex.clone(),
         };
         let key_json = serde_json::to_string_pretty(&priv_key).c(d!("serialize key"))?;
-        fs::write(config_dir.join("priv_validator_key.json"), &key_json)
-            .c(d!("write key"))?;
+        fs::write(config_dir.join("priv_validator_key.json"), &key_json).c(d!("write key"))?;
 
         // Node key is the same as validator key for hotmint (PeerId = validator pubkey)
         let node_key = NodeKey {
@@ -207,12 +204,10 @@ pub fn init_cluster(
             private_key: sk_hex.clone(),
         };
         let node_key_json = serde_json::to_string_pretty(&node_key).c(d!("serialize node key"))?;
-        fs::write(config_dir.join("node_key.json"), &node_key_json)
-            .c(d!("write node key"))?;
+        fs::write(config_dir.join("node_key.json"), &node_key_json).c(d!("write node key"))?;
 
         // Write genesis
-        fs::write(config_dir.join("genesis.json"), &genesis_json)
-            .c(d!("write genesis"))?;
+        fs::write(config_dir.join("genesis.json"), &genesis_json).c(d!("write genesis"))?;
 
         // Build config with peers (excluding self)
         let peers_without_self: Vec<String> = persistent_peers
@@ -220,8 +215,12 @@ pub fn init_cluster(
             .filter(|p| !p.starts_with(&format!("{}@", id)))
             .cloned()
             .collect();
-        let p2p_port = p2p_base_port + *id as u16;
-        let rpc_port = rpc_base_port + *id as u16;
+        let p2p_port = p2p_base_port
+            .checked_add(*id as u16)
+            .ok_or_else(|| eg!("p2p port calculation overflow"))?;
+        let rpc_port = rpc_base_port
+            .checked_add(*id as u16)
+            .ok_or_else(|| eg!("rpc port calculation overflow"))?;
         let config = generate_config(p2p_port, rpc_port, &peers_without_self, bind_ip);
         fs::write(config_dir.join("config.toml"), &config).c(d!("write config"))?;
 
@@ -259,8 +258,14 @@ pub fn init_cluster(
     state.save(base_dir)?;
 
     println!("\nCluster initialized successfully.");
-    println!("  Start:  hotmint-mgmt --base-dir {} start", base_dir.display());
-    println!("  Status: hotmint-mgmt --base-dir {} status", base_dir.display());
+    println!(
+        "  Start:  hotmint-mgmt --base-dir {} start",
+        base_dir.display()
+    );
+    println!(
+        "  Status: hotmint-mgmt --base-dir {} status",
+        base_dir.display()
+    );
 
     Ok(())
 }
@@ -287,6 +292,16 @@ pub fn destroy(base_dir: &Path) -> Result<()> {
         println!("Nothing to destroy at {}", base_dir.display());
         return Ok(());
     }
+    eprint!("Destroy cluster at {}? [y/N] ", base_dir.display());
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+    let mut input = String::new();
+    std::io::stdin()
+        .read_line(&mut input)
+        .c(d!("read confirmation"))?;
+    if !input.trim().eq_ignore_ascii_case("y") {
+        println!("Aborted.");
+        return Ok(());
+    }
     fs::remove_dir_all(base_dir).c(d!("remove base dir"))?;
     println!("Cluster destroyed: {}", base_dir.display());
     Ok(())
@@ -296,7 +311,10 @@ pub fn destroy(base_dir: &Path) -> Result<()> {
 
 pub fn info(base_dir: &Path) -> Result<()> {
     let state = ClusterState::load(base_dir)?;
-    println!("Cluster: {} ({} validators)", state.chain_id, state.validator_count);
+    println!(
+        "Cluster: {} ({} validators)",
+        state.chain_id, state.validator_count
+    );
     println!("Bind IP: {}", state.bind_ip);
     println!();
     for v in &state.validators {

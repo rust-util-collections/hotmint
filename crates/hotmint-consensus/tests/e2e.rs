@@ -10,7 +10,9 @@ use ruc::*;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
+
+use tokio::sync::RwLock;
 
 use hotmint_consensus::application::Application;
 use hotmint_consensus::engine::{ConsensusEngine, EngineConfig};
@@ -439,8 +441,10 @@ async fn test_equivocation_detected_via_injected_votes() {
     let hash_a = BlockHash([0xAAu8; 32]);
     let hash_b = BlockHash([0xBBu8; 32]);
 
-    let bytes_a = Vote::signing_bytes(view, &hash_a, VoteType::Vote);
-    let bytes_b = Vote::signing_bytes(view, &hash_b, VoteType::Vote);
+    // Use the default chain_id_hash (blake3("")) — must match ConsensusState::new()
+    let chain_id_hash = *blake3::hash(b"").as_bytes();
+    let bytes_a = Vote::signing_bytes(&chain_id_hash, view, &hash_a, VoteType::Vote);
+    let bytes_b = Vote::signing_bytes(&chain_id_hash, view, &hash_b, VoteType::Vote);
     let vote_a = Vote {
         block_hash: hash_a,
         view,
@@ -458,7 +462,8 @@ async fn test_equivocation_detected_via_injected_votes() {
 
     // Create channels manually so we can pre-load V1's queue
     let mut node_txs: Vec<mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>> = Vec::new();
-    let mut node_rxs: Vec<Option<mpsc::Receiver<(Option<ValidatorId>, ConsensusMessage)>>> = Vec::new();
+    let mut node_rxs: Vec<Option<mpsc::Receiver<(Option<ValidatorId>, ConsensusMessage)>>> =
+        Vec::new();
     for i in 0..4u64 {
         let (tx, rx) = mpsc::channel(8192);
         routing.register(ValidatorId(i), tx.clone());

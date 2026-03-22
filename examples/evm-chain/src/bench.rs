@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
+
 use std::time::Instant;
+use tokio::sync::RwLock;
 
 use ruc::*;
 
@@ -135,8 +137,10 @@ async fn run_bench(label: &str, base_timeout_ms: u64) {
     let validator_set = ValidatorSet::new(validator_infos);
 
     let mut receivers = HashMap::new();
-    let mut all_senders: HashMap<ValidatorId, mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>> =
-        HashMap::new();
+    let mut all_senders: HashMap<
+        ValidatorId,
+        mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>,
+    > = HashMap::new();
 
     for i in 0..NUM_VALIDATORS {
         let (tx, rx) = mpsc::channel(8192);

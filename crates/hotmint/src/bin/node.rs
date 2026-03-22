@@ -4,7 +4,9 @@ use std::fs;
 use std::future;
 use std::path::Path;
 use std::process;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use tokio::sync::RwLock;
 
 use clap::{Parser, Subcommand};
 use tokio::sync::watch;
@@ -207,11 +209,9 @@ async fn run_node(
     // A validator without proxy_app is always a misconfiguration — fail immediately
     // before opening P2P ports, loading state, or starting the network stack.
     if config.node.mode == NodeMode::Validator && config.proxy_app.is_empty() {
-        return Err(eg!(
-            "validator mode requires proxy_app to be configured — \
+        return Err(eg!("validator mode requires proxy_app to be configured — \
              set proxy_app = \"unix:///path/to/app.sock\" in config.toml, \
-             or switch to mode = \"fullnode\" to run without an ABCI backend"
-        ));
+             or switch to mode = \"fullnode\" to run without an ABCI backend"));
     }
 
     // 2. Load validator key (consensus signing) and node key (P2P identity)
@@ -271,7 +271,8 @@ async fn run_node(
 
     // 6. Restore consensus state
     let pcs = PersistentConsensusState::new();
-    let mut state = ConsensusState::new(our_vid, validator_set.clone());
+    let mut state =
+        ConsensusState::with_chain_id(our_vid, validator_set.clone(), &genesis.chain_id);
     if let Some(view) = pcs.load_current_view() {
         state.current_view = view;
     }
@@ -336,6 +337,7 @@ async fn run_node(
                 .iter()
                 .map(|v| (v.id, v.public_key.clone()))
                 .collect(),
+            state.chain_id_hash,
         )?
     };
 
@@ -387,8 +389,7 @@ async fn run_node(
         })
         .collect();
     let (vs_tx, vs_rx) = watch::channel(initial_vs);
-    let (epoch_tx, epoch_rx) =
-        watch::channel(state.current_epoch.clone());
+    let (epoch_tx, epoch_rx) = watch::channel(state.current_epoch.clone());
 
     let app: Arc<dyn Application> = Arc::new(AppWithStatus {
         inner: app_box,
@@ -460,7 +461,7 @@ async fn run_node(
                             Height(to_height.as_u64().min(
                                 from_height.as_u64() + hotmint_types::sync::MAX_SYNC_BATCH - 1,
                             ));
-                        let s = store.read().unwrap();
+                        let s = store.read().await;
                         let blocks = s.get_blocks_in_range(from_height, clamped);
                         let blocks_with_qcs: Vec<_> = blocks
                             .into_iter()
@@ -496,8 +497,7 @@ async fn run_node(
                 .find(|v| v.id == vid.0)
                 .and_then(|gv| {
                     let pk = hex::decode(&gv.public_key).ok()?;
-                    let lpk =
-                        litep2p::crypto::ed25519::PublicKey::try_from_bytes(&pk).ok()?;
+                    let lpk = litep2p::crypto::ed25519::PublicKey::try_from_bytes(&pk).ok()?;
                     Some(lpk.to_peer_id())
                 })?;
             Some((vid, peer_id))
@@ -518,9 +518,11 @@ async fn run_node(
                 info!("no peers connected within timeout, skipping sync");
                 break;
             }
-            let _ =
-                tokio::time::timeout(tokio::time::Duration::from_millis(500), notif_count_rx.changed())
-                    .await;
+            let _ = tokio::time::timeout(
+                tokio::time::Duration::from_millis(500),
+                notif_count_rx.changed(),
+            )
+            .await;
         }
 
         if *notif_count_rx.borrow() > 0 {
@@ -532,8 +534,7 @@ async fn run_node(
             for (vid, peer_id) in &sync_peers {
                 let bridge_sink = sync_sink.clone();
                 let pid = *peer_id;
-                let (sync_tx, mut sync_bridge_rx) =
-                    tokio::sync::mpsc::channel::<SyncRequest>(16);
+                let (sync_tx, mut sync_bridge_rx) = tokio::sync::mpsc::channel::<SyncRequest>(16);
 
                 let bridge = tokio::spawn(async move {
                     while let Some(req) = sync_bridge_rx.recv().await {
@@ -554,6 +555,7 @@ async fn run_node(
                     &mut engine_state_app_hash,
                     &sync_tx,
                     &mut sync_resp_rx,
+                    &state.chain_id_hash,
                 )
                 .await
                 {
@@ -588,6 +590,7 @@ async fn run_node(
         let watcher_epoch_rx = epoch_rx;
         // watcher_status_rx provides last_committed_height from the running engine
         let watcher_status_rx = watcher_status_rx;
+        let watcher_chain_id_hash = state.chain_id_hash;
 
         tokio::spawn(async move {
             use hotmint_types::sync::SyncRequest;
@@ -604,8 +607,7 @@ async fn run_node(
                     let current_epoch = watcher_epoch_rx.borrow().clone();
                     // Use last_committed_height from the consensus status, not tip_height,
                     // to avoid skipping uncommitted/proposed blocks that are already stored.
-                    let current_height =
-                        Height(watcher_status_rx.borrow().last_committed_height);
+                    let current_height = Height(watcher_status_rx.borrow().last_committed_height);
                     let mut h = current_height;
                     let mut epoch = current_epoch;
                     // NoopApplication: app_hash is carried from blocks, initial value irrelevant
@@ -633,6 +635,7 @@ async fn run_node(
                             &mut app_hash,
                             &sync_tx,
                             &mut watcher_resp_rx,
+                            &watcher_chain_id_hash,
                         )
                         .await
                         {
@@ -668,7 +671,7 @@ async fn run_node(
     // the network experienced view timeouts where view >> height).
     if engine_state_height > Height::GENESIS {
         let synced_view = {
-            let s = store.read().unwrap();
+            let s = store.read().await;
             s.get_block_by_height(engine_state_height)
                 .map(|b| ViewNumber(b.view.as_u64() + 1))
                 .unwrap_or(ViewNumber(engine_state_height.as_u64() + 1))
@@ -688,6 +691,15 @@ async fn run_node(
         max_timeout_ms: config.consensus.max_timeout_ms,
         backoff_multiplier: config.consensus.backoff_multiplier,
     };
+    if pacemaker_config.base_timeout_ms == 0 {
+        return Err(eg!("consensus.base_timeout_ms must be > 0"));
+    }
+    if pacemaker_config.max_timeout_ms < pacemaker_config.base_timeout_ms {
+        return Err(eg!("consensus.max_timeout_ms must be >= base_timeout_ms"));
+    }
+    if pacemaker_config.backoff_multiplier < 1.0 {
+        return Err(eg!("consensus.backoff_multiplier must be >= 1.0"));
+    }
     let engine = ConsensusEngine::new(
         state,
         store.clone(),
@@ -737,6 +749,24 @@ async fn run_node(
                 Err(e) => error!("reconnect watcher panicked: {e}"),
             }
             process::exit(1);
+        }
+        _ = tokio::signal::ctrl_c() => {
+            info!("received shutdown signal, exiting...");
+        }
+        _ = async {
+            #[cfg(unix)]
+            {
+                let mut sigterm = tokio::signal::unix::signal(
+                    tokio::signal::unix::SignalKind::terminate()
+                ).expect("failed to register SIGTERM handler");
+                sigterm.recv().await;
+            }
+            #[cfg(not(unix))]
+            {
+                std::future::pending::<()>().await;
+            }
+        } => {
+            info!("received SIGTERM, shutting down...");
         }
     }
 

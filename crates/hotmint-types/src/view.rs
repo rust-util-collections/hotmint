@@ -10,7 +10,7 @@ impl ViewNumber {
     pub const GENESIS: Self = Self(0);
 
     pub fn next(self) -> Self {
-        Self(self.0 + 1)
+        Self(self.0.checked_add(1).expect("view number overflow"))
     }
 
     pub fn as_u64(self) -> u64 {

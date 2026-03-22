@@ -62,8 +62,12 @@ pub fn enter_view(
                 state.step = ViewStep::WaitingForStatus;
             } else {
                 // Send status to new leader
-                let leader_id = state.validator_set.leader_for_view(view).id;
-                let msg_bytes = status_signing_bytes(view, &state.locked_qc);
+                let leader_id = state
+                    .validator_set
+                    .leader_for_view(view)
+                    .expect("empty validator set")
+                    .id;
+                let msg_bytes = status_signing_bytes(&state.chain_id_hash, view, &state.locked_qc);
                 let sig = signer.sign(&msg_bytes);
                 network.send_to(
                     leader_id,
@@ -83,8 +87,12 @@ pub fn enter_view(
             if am_leader {
                 state.step = ViewStep::WaitingForStatus;
             } else {
-                let leader_id = state.validator_set.leader_for_view(view).id;
-                let msg_bytes = status_signing_bytes(view, &state.locked_qc);
+                let leader_id = state
+                    .validator_set
+                    .leader_for_view(view)
+                    .expect("empty validator set")
+                    .id;
+                let msg_bytes = status_signing_bytes(&state.chain_id_hash, view, &state.locked_qc);
                 let sig = signer.sign(&msg_bytes);
                 network.send_to(
                     leader_id,
@@ -143,7 +151,7 @@ pub fn propose(
 
     store.put_block(block.clone());
 
-    let msg_bytes = proposal_signing_bytes(&block, &justify);
+    let msg_bytes = proposal_signing_bytes(&state.chain_id_hash, &block, &justify);
     let signature = signer.sign(&msg_bytes);
 
     info!(
@@ -210,7 +218,11 @@ pub fn on_proposal(
     }
 
     // Verify proposer is the rightful leader for this view
-    let expected_leader = state.validator_set.leader_for_view(block.view).id;
+    let expected_leader = state
+        .validator_set
+        .leader_for_view(block.view)
+        .ok_or_else(|| eg!("empty validator set"))?
+        .id;
     if block.proposer != expected_leader {
         return Err(eg!(
             "block proposer {} is not leader {} for view {}",
@@ -272,7 +284,7 @@ pub fn on_proposal(
                 pending_epoch = result.pending_epoch;
             }
             Err(e) => {
-                warn!(error = %e, "try_commit failed during fast-forward in on_proposal");
+                return Err(eg!("try_commit failed during fast-forward: {}", e));
             }
         }
     }
@@ -290,7 +302,12 @@ pub fn on_proposal(
 
     // Vote (first phase) → send to current leader (only if we have voting power)
     if state.validator_set.power_of(state.validator_id) > 0 {
-        let vote_bytes = Vote::signing_bytes(state.current_view, &block.hash, VoteType::Vote);
+        let vote_bytes = Vote::signing_bytes(
+            &state.chain_id_hash,
+            state.current_view,
+            &block.hash,
+            VoteType::Vote,
+        );
         let signature = signer.sign(&vote_bytes);
         let vote = Vote {
             block_hash: block.hash,
@@ -300,7 +317,11 @@ pub fn on_proposal(
             vote_type: VoteType::Vote,
         };
 
-        let leader_id = state.validator_set.leader_for_view(state.current_view).id;
+        let leader_id = state
+            .validator_set
+            .leader_for_view(state.current_view)
+            .expect("empty validator set")
+            .id;
         info!(
             validator = %state.validator_id,
             view = %state.current_view,
@@ -330,7 +351,7 @@ pub fn on_votes_collected(
 
     state.update_highest_qc(&qc);
 
-    let msg_bytes = prepare_signing_bytes(&qc);
+    let msg_bytes = prepare_signing_bytes(&state.chain_id_hash, &qc);
     let signature = signer.sign(&msg_bytes);
 
     network.broadcast(ConsensusMessage::Prepare {
@@ -354,7 +375,12 @@ pub fn on_prepare(
 
     // Vote2 → send to next leader (only if we have voting power)
     if state.validator_set.power_of(state.validator_id) > 0 {
-        let vote_bytes = Vote::signing_bytes(state.current_view, &qc.block_hash, VoteType::Vote2);
+        let vote_bytes = Vote::signing_bytes(
+            &state.chain_id_hash,
+            state.current_view,
+            &qc.block_hash,
+            VoteType::Vote2,
+        );
         let signature = signer.sign(&vote_bytes);
         let vote = Vote {
             block_hash: qc.block_hash,
@@ -381,11 +407,14 @@ pub fn on_prepare(
 // --- Signing helpers ---
 
 pub(crate) fn status_signing_bytes(
+    chain_id_hash: &[u8; 32],
     view: ViewNumber,
     locked_qc: &Option<QuorumCertificate>,
 ) -> Vec<u8> {
-    let mut buf = Vec::new();
-    buf.push(b'S');
+    let tag = b"HOTMINT_STATUS_V1\0";
+    let mut buf = Vec::with_capacity(tag.len() + 32 + 8 + 40);
+    buf.extend_from_slice(tag);
+    buf.extend_from_slice(chain_id_hash);
     buf.extend_from_slice(&view.as_u64().to_le_bytes());
     if let Some(qc) = locked_qc {
         buf.extend_from_slice(&qc.block_hash.0);
@@ -394,18 +423,26 @@ pub(crate) fn status_signing_bytes(
     buf
 }
 
-pub(crate) fn proposal_signing_bytes(block: &Block, justify: &QuorumCertificate) -> Vec<u8> {
-    let mut buf = Vec::new();
-    buf.push(b'P');
+pub(crate) fn proposal_signing_bytes(
+    chain_id_hash: &[u8; 32],
+    block: &Block,
+    justify: &QuorumCertificate,
+) -> Vec<u8> {
+    let tag = b"HOTMINT_PROPOSAL_V1\0";
+    let mut buf = Vec::with_capacity(tag.len() + 32 + 32 + 32 + 8);
+    buf.extend_from_slice(tag);
+    buf.extend_from_slice(chain_id_hash);
     buf.extend_from_slice(&block.hash.0);
     buf.extend_from_slice(&justify.block_hash.0);
     buf.extend_from_slice(&justify.view.as_u64().to_le_bytes());
     buf
 }
 
-pub(crate) fn prepare_signing_bytes(qc: &QuorumCertificate) -> Vec<u8> {
-    let mut buf = Vec::new();
-    buf.push(b'Q');
+pub(crate) fn prepare_signing_bytes(chain_id_hash: &[u8; 32], qc: &QuorumCertificate) -> Vec<u8> {
+    let tag = b"HOTMINT_PREPARE_V1\0";
+    let mut buf = Vec::with_capacity(tag.len() + 32 + 32 + 8);
+    buf.extend_from_slice(tag);
+    buf.extend_from_slice(chain_id_hash);
     buf.extend_from_slice(&qc.block_hash.0);
     buf.extend_from_slice(&qc.view.as_u64().to_le_bytes());
     buf

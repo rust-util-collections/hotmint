@@ -28,6 +28,9 @@ pub enum ViewStep {
 pub struct ConsensusState {
     pub validator_id: ValidatorId,
     pub validator_set: ValidatorSet,
+    /// Blake3 hash of the chain identifier — included in all signing bytes
+    /// to prevent cross-chain signature replay.
+    pub chain_id_hash: [u8; 32],
     pub current_view: ViewNumber,
     pub role: ViewRole,
     pub step: ViewStep,
@@ -43,10 +46,20 @@ pub struct ConsensusState {
 
 impl ConsensusState {
     pub fn new(validator_id: ValidatorId, validator_set: ValidatorSet) -> Self {
+        Self::with_chain_id(validator_id, validator_set, "")
+    }
+
+    pub fn with_chain_id(
+        validator_id: ValidatorId,
+        validator_set: ValidatorSet,
+        chain_id: &str,
+    ) -> Self {
         let current_epoch = Epoch::genesis(validator_set.clone());
+        let chain_id_hash = *blake3::hash(chain_id.as_bytes()).as_bytes();
         Self {
             validator_id,
             validator_set,
+            chain_id_hash,
             current_view: ViewNumber::GENESIS,
             role: ViewRole::Replica,
             step: ViewStep::Entered,

@@ -2,12 +2,14 @@ use hotmint_types::{ValidatorId, ValidatorSet, ViewNumber};
 
 /// Check if the given validator is the leader for the given view
 pub fn is_leader(vs: &ValidatorSet, view: ViewNumber, id: ValidatorId) -> bool {
-    vs.leader_for_view(view).id == id
+    vs.leader_for_view(view).is_some_and(|l| l.id == id)
 }
 
 /// Get the leader for the next view
 pub fn next_leader(vs: &ValidatorSet, view: ViewNumber) -> ValidatorId {
-    vs.leader_for_view(view.next()).id
+    vs.leader_for_view(view.next())
+        .expect("empty validator set in next_leader")
+        .id
 }
 
 #[cfg(test)]

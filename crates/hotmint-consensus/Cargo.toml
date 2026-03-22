@@ -10,6 +10,7 @@ keywords.workspace = true
 [dependencies]
 hotmint-types = { workspace = true }
 hotmint-crypto = { workspace = true }
+blake3 = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

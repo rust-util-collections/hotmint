@@ -60,6 +60,12 @@ pub struct IpcApplicationServer<H> {
     handler: H,
 }
 
+impl<H> Drop for IpcApplicationServer<H> {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.socket_path);
+    }
+}
+
 impl<H: ApplicationHandler + 'static> IpcApplicationServer<H> {
     pub fn new(socket_path: impl AsRef<Path>, handler: H) -> Self {
         Self {
@@ -80,7 +86,13 @@ impl<H: ApplicationHandler + 'static> IpcApplicationServer<H> {
         tracing::info!(path = %self.socket_path.display(), "IPC server listening");
 
         loop {
-            let (mut stream, _addr) = listener.accept().await?;
+            let (mut stream, _addr) = match listener.accept().await {
+                Ok(conn) => conn,
+                Err(e) => {
+                    tracing::warn!(error = %e, "IPC accept failed, continuing");
+                    continue;
+                }
+            };
             tracing::debug!("IPC client connected");
 
             loop {

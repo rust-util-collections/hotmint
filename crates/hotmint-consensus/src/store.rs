@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use tokio::sync::RwLock;
 
 use hotmint_types::{Block, BlockHash, Height, QuorumCertificate};
 
@@ -45,28 +47,52 @@ pub struct SharedStoreAdapter(pub Arc<RwLock<Box<dyn BlockStore>>>);
 
 impl BlockStore for SharedStoreAdapter {
     fn put_block(&mut self, block: Block) {
-        self.0.write().unwrap().put_block(block);
+        self.0
+            .try_write()
+            .expect("store write lock contended")
+            .put_block(block);
     }
     fn get_block(&self, hash: &BlockHash) -> Option<Block> {
-        self.0.read().unwrap().get_block(hash)
+        self.0
+            .try_read()
+            .expect("store read lock contended")
+            .get_block(hash)
     }
     fn get_block_by_height(&self, h: Height) -> Option<Block> {
-        self.0.read().unwrap().get_block_by_height(h)
+        self.0
+            .try_read()
+            .expect("store read lock contended")
+            .get_block_by_height(h)
     }
     fn get_blocks_in_range(&self, from: Height, to: Height) -> Vec<Block> {
-        self.0.read().unwrap().get_blocks_in_range(from, to)
+        self.0
+            .try_read()
+            .expect("store read lock contended")
+            .get_blocks_in_range(from, to)
     }
     fn tip_height(&self) -> Height {
-        self.0.read().unwrap().tip_height()
+        self.0
+            .try_read()
+            .expect("store read lock contended")
+            .tip_height()
     }
     fn put_commit_qc(&mut self, height: Height, qc: QuorumCertificate) {
-        self.0.write().unwrap().put_commit_qc(height, qc);
+        self.0
+            .try_write()
+            .expect("store write lock contended")
+            .put_commit_qc(height, qc);
     }
     fn get_commit_qc(&self, height: Height) -> Option<QuorumCertificate> {
-        self.0.read().unwrap().get_commit_qc(height)
+        self.0
+            .try_read()
+            .expect("store read lock contended")
+            .get_commit_qc(height)
     }
     fn flush(&self) {
-        self.0.read().unwrap().flush();
+        self.0
+            .try_read()
+            .expect("store read lock contended")
+            .flush();
     }
 }
 
@@ -95,7 +121,7 @@ impl MemoryBlockStore {
         store
     }
 
-    /// Create a new in-memory block store wrapped in `Arc<RwLock<Box<dyn BlockStore>>>`,
+    /// Create a new in-memory block store wrapped in `Arc<tokio::sync::RwLock<Box<dyn BlockStore>>>`,
     /// ready for use with `ConsensusEngine`.
     pub fn new_shared() -> crate::engine::SharedBlockStore {
         Arc::new(RwLock::new(Box::new(Self::new())))

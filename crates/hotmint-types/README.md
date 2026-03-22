@@ -40,7 +40,7 @@ assert_eq!(vs.quorum_threshold(), 3);    // ceil(2*4/3)
 assert_eq!(vs.max_faulty_power(), 1);    // floor((4-1)/3)
 
 // Round-robin leader election
-let leader = vs.leader_for_view(ViewNumber(5));
+let leader = vs.leader_for_view(ViewNumber(5)).unwrap();
 
 // Aggregate signatures
 let mut agg = AggregateSignature::new(4);

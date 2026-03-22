@@ -37,6 +37,8 @@ mod tests {
     use hotmint_types::vote::VoteType;
     use hotmint_types::{BlockHash, Signer};
 
+    const TEST_CHAIN: [u8; 32] = [0u8; 32];
+
     fn make_env() -> (ValidatorSet, Vec<Ed25519Signer>) {
         let signers: Vec<Ed25519Signer> = (0..4)
             .map(|i| Ed25519Signer::generate(ValidatorId(i)))
@@ -61,7 +63,7 @@ mod tests {
             .iter()
             .take(3)
             .map(|s| {
-                let bytes = Vote::signing_bytes(view, &hash, VoteType::Vote);
+                let bytes = Vote::signing_bytes(&TEST_CHAIN, view, &hash, VoteType::Vote);
                 Vote {
                     block_hash: hash,
                     view,
@@ -86,7 +88,7 @@ mod tests {
             .iter()
             .take(2)
             .map(|s| {
-                let bytes = Vote::signing_bytes(view, &hash, VoteType::Vote);
+                let bytes = Vote::signing_bytes(&TEST_CHAIN, view, &hash, VoteType::Vote);
                 Vote {
                     block_hash: hash,
                     view,
@@ -107,7 +109,7 @@ mod tests {
         let (vs, _) = make_env();
         let unknown_signer = Ed25519Signer::generate(ValidatorId(99));
         let hash = BlockHash([3u8; 32]);
-        let bytes = Vote::signing_bytes(ViewNumber(1), &hash, VoteType::Vote);
+        let bytes = Vote::signing_bytes(&TEST_CHAIN, ViewNumber(1), &hash, VoteType::Vote);
         let vote = Vote {
             block_hash: hash,
             view: ViewNumber(1),

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+
+use tokio::sync::RwLock;
 
 use hotmint_abci::client::IpcApplicationClient;
 use hotmint_abci::server::{ApplicationHandler, IpcApplicationServer};
@@ -76,8 +78,10 @@ async fn ipc_consensus_e2e() {
     let validator_set = ValidatorSet::new(validator_infos);
 
     let mut receivers = HashMap::new();
-    let mut all_senders: HashMap<ValidatorId, mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>> =
-        HashMap::new();
+    let mut all_senders: HashMap<
+        ValidatorId,
+        mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>,
+    > = HashMap::new();
     for i in 0..NUM_VALIDATORS {
         let (tx, rx) = mpsc::channel(8192);
         receivers.insert(ValidatorId(i), rx);

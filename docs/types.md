@@ -47,6 +47,8 @@ pub struct Block {
     pub view: ViewNumber,
     pub proposer: ValidatorId,
     pub payload: Vec<u8>,
+    /// Application state root after executing the parent block.
+    pub app_hash: BlockHash,
 }
 ```
 
@@ -153,7 +155,7 @@ assert_eq!(vs.quorum_threshold(), 3);    // ceil(2*4/3)
 assert_eq!(vs.max_faulty_power(), 1);    // floor((4-1)/3)
 
 // round-robin leader election
-let leader = vs.leader_for_view(ViewNumber(5)); // validators[5 % 4] = validators[1]
+let leader = vs.leader_for_view(ViewNumber(5)).unwrap(); // validators[5 % 4] = validators[1]
 
 // O(1) lookups
 let idx = vs.index_of(ValidatorId(2));    // Some(2)
@@ -161,11 +163,12 @@ let info = vs.get(ValidatorId(2));        // Some(&ValidatorInfo)
 let power = vs.power_of(ValidatorId(2));  // 1
 ```
 
-After deserialization (e.g., from persistent storage), call `rebuild_index()` to reconstruct the O(1) lookup map:
+The index map is automatically rebuilt during deserialization. You only need to call `rebuild_index()` manually if you modify the validators list directly:
 
 ```rust
 let mut vs: ValidatorSet = serde_json::from_str(&json)?;
-vs.rebuild_index();
+// index_map is already populated — no manual rebuild needed
+vs.rebuild_index(); // only needed if you mutate validators directly
 ```
 
 ## Epochs
@@ -177,11 +180,12 @@ pub struct EpochNumber(pub u64);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Epoch {
     pub number: EpochNumber,
+    pub start_view: ViewNumber,
     pub validator_set: ValidatorSet,
 }
 ```
 
-An epoch defines a validator set configuration. Epoch transitions happen at predefined block heights and allow adding/removing validators or changing voting power.
+An epoch defines a validator set with a starting view. Epoch transitions happen when the staking module signals a validator set change; the new epoch takes effect at `start_view` (deterministically set to `commit_view + 2`), so all honest nodes apply the transition at the same view.
 
 ## Cryptographic Primitives
 

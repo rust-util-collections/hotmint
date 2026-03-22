@@ -1,9 +1,9 @@
 use ruc::*;
 
 use std::collections::{HashMap, HashSet};
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::iter;
 use std::mem;
+use std::time::Instant;
 
 use futures::StreamExt;
 use hotmint_consensus::network::NetworkSink;
@@ -22,12 +22,14 @@ use litep2p::types::multiaddr::Multiaddr;
 use litep2p::{Litep2p, Litep2pEvent, PeerId};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, watch};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use tokio::sync::RwLock;
 
 use crate::codec;
-use crate::peer::{PeerBook, PeerInfo};
+use crate::peer::{PeerBook, PeerInfo, PeerRole};
 use crate::pex::{PexConfig, PexRequest, PexResponse};
 
 const NOTIF_PROTOCOL: &str = "/hotmint/consensus/notif/1";
@@ -137,6 +139,8 @@ pub struct NetworkService {
     /// Validators in round-robin order for leader-for-view computation.
     /// Must match the ordering in `ValidatorSet::validators()`.
     validator_ids_ordered: Vec<ValidatorId>,
+    /// Blake3 hash of the chain identifier — used for relay signature verification.
+    chain_id_hash: [u8; 32],
     msg_tx: mpsc::Sender<(Option<ValidatorId>, ConsensusMessage)>,
     cmd_rx: mpsc::Receiver<NetCommand>,
     sync_req_tx: mpsc::Sender<IncomingSyncRequest>,
@@ -154,6 +158,10 @@ pub struct NetworkService {
     /// would create.
     seen_active: HashSet<u64>,
     seen_backup: HashSet<u64>,
+    /// Reliable channel for epoch changes (F-02).
+    epoch_rx: watch::Receiver<Option<Vec<(ValidatorId, hotmint_types::crypto::PublicKey)>>>,
+    /// Per-peer rate limiting for PEX requests (F-09).
+    pex_rate_limit: HashMap<PeerId, Instant>,
 }
 
 impl NetworkService {
@@ -167,6 +175,7 @@ impl NetworkService {
         pex_config: PexConfig,
         relay_consensus: bool,
         initial_validators: Vec<(ValidatorId, hotmint_types::crypto::PublicKey)>,
+        chain_id_hash: [u8; 32],
     ) -> Result<NetworkServiceHandles> {
         let (notif_config, notif_handle) = NotifConfigBuilder::new(NOTIF_PROTOCOL.into())
             .with_max_size(MAX_NOTIFICATION_SIZE)
@@ -242,8 +251,12 @@ impl NetworkService {
             .collect();
         let (peer_info_tx, peer_info_rx) = watch::channel(initial_peers);
 
+        let (epoch_tx, epoch_rx) =
+            watch::channel::<Option<Vec<(ValidatorId, hotmint_types::crypto::PublicKey)>>>(None);
+
         let sink = Litep2pNetworkSink {
             cmd_tx: cmd_tx.clone(),
+            epoch_tx,
         };
 
         let (connected_count_tx, connected_count_rx) = watch::channel(0usize);
@@ -272,6 +285,7 @@ impl NetworkService {
                 relay_consensus,
                 validator_keys,
                 validator_ids_ordered,
+                chain_id_hash,
                 msg_tx,
                 cmd_rx,
                 sync_req_tx,
@@ -283,6 +297,8 @@ impl NetworkService {
                 connected_peers: HashSet::new(),
                 seen_active: HashSet::new(),
                 seen_backup: HashSet::new(),
+                epoch_rx,
+                pex_rate_limit: HashMap::new(),
             },
             sink,
             msg_rx,
@@ -316,7 +332,7 @@ impl NetworkService {
             tokio::select! {
                 event = self.notif_handle.next() => {
                     if let Some(event) = event {
-                        self.handle_notification_event(event);
+                        self.handle_notification_event(event).await;
                     }
                 }
                 event = self.reqresp_handle.next() => {
@@ -326,24 +342,30 @@ impl NetworkService {
                 }
                 event = self.sync_handle.next() => {
                     if let Some(event) = event {
-                        self.handle_sync_event(event);
+                        self.handle_sync_event(event).await;
                     }
                 }
                 event = self.pex_handle.next() => {
                     if let Some(event) = event {
-                        self.handle_pex_event(event);
+                        self.handle_pex_event(event).await;
                     }
                 }
                 event = self.litep2p.next_event() => {
                     if let Some(event) = event {
-                        self.handle_litep2p_event(event);
+                        self.handle_litep2p_event(event).await;
                     }
                 }
                 Some(cmd) = self.cmd_rx.recv() => {
                     self.handle_command(cmd).await;
                 }
+                Ok(()) = self.epoch_rx.changed() => {
+                    let epoch_val = self.epoch_rx.borrow_and_update().clone();
+                    if let Some(validators) = epoch_val {
+                        self.handle_epoch_change(validators).await;
+                    }
+                }
                 _ = maintenance_interval.tick() => {
-                    self.run_maintenance();
+                    self.run_maintenance().await;
                 }
                 _ = pex_interval.tick() => {
                     if self.pex_config.enabled {
@@ -354,7 +376,7 @@ impl NetworkService {
         }
     }
 
-    fn handle_notification_event(&mut self, event: NotificationEvent) {
+    async fn handle_notification_event(&mut self, event: NotificationEvent) {
         match event {
             NotificationEvent::ValidateSubstream { peer, .. } => {
                 self.notif_handle
@@ -376,15 +398,15 @@ impl NetworkService {
             }
             NotificationEvent::NotificationReceived { peer, notification } => {
                 // Determine the sender ValidatorId (None if peer is not a known validator)
-                let sender: Option<ValidatorId> = self
-                    .peer_map
-                    .peer_to_validator
-                    .get(&peer)
-                    .copied();
+                let sender: Option<ValidatorId> =
+                    self.peer_map.peer_to_validator.get(&peer).copied();
 
                 match codec::decode::<ConsensusMessage>(&notification) {
                     Ok(msg) => {
-                        if let Err(e) = self.msg_tx.try_send((sender, msg.clone())) {
+                        // F-08: Only deliver to consensus if sender is a known validator.
+                        if sender.is_some()
+                            && let Err(e) = self.msg_tx.try_send((sender, msg.clone()))
+                        {
                             warn!("consensus message dropped (notification): {e}");
                         }
 
@@ -399,11 +421,14 @@ impl NetworkService {
                                 &msg,
                                 &self.validator_keys,
                                 &self.validator_ids_ordered,
+                                &self.chain_id_hash,
                             )
                         {
-                            let mut hasher = DefaultHasher::new();
-                            notification.hash(&mut hasher);
-                            let msg_hash = hasher.finish();
+                            let msg_hash = u64::from_le_bytes(
+                                blake3::hash(&notification).as_bytes()[..8]
+                                    .try_into()
+                                    .unwrap(),
+                            );
 
                             // Check both sets to avoid re-relay across rotations
                             if !self.seen_active.contains(&msg_hash)
@@ -423,13 +448,18 @@ impl NetworkService {
                                     self.seen_backup = mem::take(&mut self.seen_active);
                                 }
                             }
+                            // F-31: Reward peer for a valid relayed consensus message.
+                            self.peer_book
+                                .write()
+                                .await
+                                .adjust_score(&peer.to_string(), 1);
                         }
                     }
                     Err(e) => {
                         warn!(error = %e, peer = %peer, "failed to decode notification");
                         self.peer_book
                             .write()
-                            .unwrap()
+                            .await
                             .adjust_score(&peer.to_string(), -10);
                     }
                 }
@@ -473,7 +503,7 @@ impl NetworkService {
         }
     }
 
-    fn handle_sync_event(&mut self, event: RequestResponseEvent) {
+    async fn handle_sync_event(&mut self, event: RequestResponseEvent) {
         match event {
             RequestResponseEvent::RequestReceived {
                 peer,
@@ -500,7 +530,7 @@ impl NetworkService {
                         warn!(error = %e, peer = %peer, "failed to decode sync request");
                         self.peer_book
                             .write()
-                            .unwrap()
+                            .await
                             .adjust_score(&peer.to_string(), -5);
                         let err_resp = SyncResponse::Error(format!("decode error: {e}"));
                         if let Ok(bytes) = codec::encode(&err_resp) {
@@ -540,7 +570,7 @@ impl NetworkService {
         }
     }
 
-    fn handle_pex_event(&mut self, event: RequestResponseEvent) {
+    async fn handle_pex_event(&mut self, event: RequestResponseEvent) {
         match event {
             RequestResponseEvent::RequestReceived {
                 peer,
@@ -556,9 +586,18 @@ impl NetworkService {
                     self.pex_handle.reject_request(request_id);
                     return;
                 }
+                // F-09: Rate limit PEX requests per peer (max 1 every 10s).
+                let now = Instant::now();
+                if let Some(last) = self.pex_rate_limit.get(&peer)
+                    && now.duration_since(*last) < std::time::Duration::from_secs(10)
+                {
+                    self.pex_handle.reject_request(request_id);
+                    return;
+                }
+                self.pex_rate_limit.insert(peer, now);
                 match serde_cbor_2::from_slice::<PexRequest>(&request) {
                     Ok(PexRequest::GetPeers) => {
-                        let book = self.peer_book.read().unwrap();
+                        let book = self.peer_book.read().await;
                         let private = &self.pex_config.private_peer_ids;
                         let peers: Vec<PeerInfo> = book
                             .get_random_peers(self.pex_config.max_peers_per_response)
@@ -578,6 +617,12 @@ impl NetworkService {
                         validator_id,
                         addresses,
                     }) => {
+                        // F-10: Reject if role is "validator" but validator_id is None.
+                        if role == PeerRole::Validator && validator_id.is_none() {
+                            warn!(peer = %peer, "PEX Advertise claims validator role without validator_id");
+                            self.pex_handle.reject_request(request_id);
+                            return;
+                        }
                         // P2: If claiming validator_id, verify PeerId matches peer_map
                         if let Some(vid) = validator_id
                             && let Some(&expected_peer) =
@@ -592,6 +637,8 @@ impl NetworkService {
                             self.pex_handle.reject_request(request_id);
                             return;
                         }
+                        // F-10: Limit addresses to max 8 to prevent abuse.
+                        let addresses: Vec<_> = addresses.iter().take(8).cloned().collect();
                         let mut info = PeerInfo::new(
                             peer,
                             role,
@@ -600,7 +647,7 @@ impl NetworkService {
                         if let Some(vid) = validator_id {
                             info = info.with_validator(ValidatorId(vid));
                         }
-                        self.peer_book.write().unwrap().add_peer(info);
+                        self.peer_book.write().await.add_peer(info);
                         if let Ok(bytes) = serde_cbor_2::to_vec(&PexResponse::Ack) {
                             self.pex_handle.send_response(request_id, bytes);
                         }
@@ -613,7 +660,7 @@ impl NetworkService {
             }
             RequestResponseEvent::ResponseReceived { response, .. } => {
                 if let Ok(PexResponse::Peers(peers)) = serde_cbor_2::from_slice(&response) {
-                    let mut book = self.peer_book.write().unwrap();
+                    let mut book = self.peer_book.write().await;
                     for peer in peers {
                         if !peer.is_banned() {
                             book.add_peer(peer);
@@ -621,24 +668,44 @@ impl NetworkService {
                     }
                 }
             }
-            _ => {}
+            // F-27: Log unhandled PEX events instead of silently dropping.
+            other => {
+                trace!("unhandled PEX event: {other:?}");
+            }
         }
     }
 
     /// Periodic connection maintenance: reconnect persistent peers, save peer book.
-    fn run_maintenance(&mut self) {
-        // 1. Reconnect disconnected persistent peers
-        for (&_vid, &pid) in &self.persistent_peers {
-            if !self.connected_peers.contains(&pid)
-                && let Some(info) = self.peer_book.read().unwrap().get(&pid.to_string())
-            {
-                let addrs: Vec<Multiaddr> = info
-                    .addresses
-                    .iter()
-                    .filter_map(|a| a.parse().ok())
-                    .collect();
-                if !addrs.is_empty() {
-                    self.litep2p.add_known_address(pid, addrs.into_iter());
+    async fn run_maintenance(&mut self) {
+        // 1. Reconnect disconnected persistent peers.
+        // Collect addresses outside the lock scope to avoid holding it across await.
+        let to_dial: Vec<(PeerId, Vec<Multiaddr>)> = {
+            let book = self.peer_book.read().await;
+            self.persistent_peers
+                .values()
+                .filter(|pid| !self.connected_peers.contains(pid))
+                .filter_map(|&pid| {
+                    book.get(&pid.to_string()).map(|info| {
+                        let addrs: Vec<Multiaddr> = info
+                            .addresses
+                            .iter()
+                            .filter_map(|a| a.parse().ok())
+                            .collect();
+                        (pid, addrs)
+                    })
+                })
+                .collect()
+        };
+
+        for (pid, addrs) in to_dial {
+            if !addrs.is_empty() {
+                self.litep2p
+                    .add_known_address(pid, addrs.clone().into_iter());
+                // F-07: Also actively dial the first address to trigger reconnection.
+                let mut dial_addr = addrs[0].clone();
+                dial_addr.push(litep2p::types::multiaddr::Protocol::P2p(pid.into()));
+                if let Err(e) = self.litep2p.dial_address(dial_addr).await {
+                    debug!(peer = %pid, error = ?e, "persistent peer redial failed");
                 }
             }
         }
@@ -646,7 +713,7 @@ impl NetworkService {
         // 2. Try to connect to peers from book if under target
         let max = self.pex_config.max_peers;
         if self.connected_peers.len() < max * 4 / 5 {
-            let book = self.peer_book.read().unwrap();
+            let book = self.peer_book.read().await;
             let candidates = book.get_random_peers(5);
             for peer in candidates {
                 if let Ok(pid) = peer.peer_id.parse::<PeerId>()
@@ -665,8 +732,8 @@ impl NetworkService {
         }
 
         // 3. Prune stale peers (older than 24 hours) and persist
-        self.peer_book.write().unwrap().prune_stale(86400);
-        if let Err(e) = self.peer_book.read().unwrap().save() {
+        self.peer_book.write().await.prune_stale(86400);
+        if let Err(e) = self.peer_book.read().await.save() {
             warn!(%e, "failed to save peer book");
         }
     }
@@ -689,7 +756,7 @@ impl NetworkService {
         }
     }
 
-    fn handle_litep2p_event(&mut self, event: Litep2pEvent) {
+    async fn handle_litep2p_event(&mut self, event: Litep2pEvent) {
         match event {
             Litep2pEvent::ConnectionEstablished { peer, endpoint } => {
                 // Enforce total connection limit
@@ -708,15 +775,12 @@ impl NetworkService {
                 let _ = self.connected_count_tx.send(self.connected_peers.len());
 
                 // Open notification substream to this peer for consensus messages.
-                if let Err(e) = self
-                    .notif_handle
-                    .try_open_substream_batch(iter::once(peer))
-                {
+                if let Err(e) = self.notif_handle.try_open_substream_batch(iter::once(peer)) {
                     debug!(peer = %peer, error = ?e, "failed to open notification substream");
                 }
 
                 // Update last_seen in peer book
-                if let Some(info) = self.peer_book.write().unwrap().get_mut(&peer.to_string()) {
+                if let Some(info) = self.peer_book.write().await.get_mut(&peer.to_string()) {
                     info.touch();
                 }
             }
@@ -735,7 +799,10 @@ impl NetworkService {
             Litep2pEvent::DialFailure { address, error, .. } => {
                 warn!(address = %address, error = ?error, "dial failed");
             }
-            _ => {}
+            // F-27: Log unhandled litep2p events instead of silently dropping.
+            other => {
+                trace!(?other, "unhandled litep2p event");
+            }
         }
     }
 
@@ -794,39 +861,47 @@ impl NetworkService {
                 self.sync_handle.send_response(request_id, bytes);
             }
             NetCommand::EpochChange(validators) => {
-                // Rebuild peer_map entries for new validators using PeerBook
-                for (vid, pubkey) in &validators {
-                    if self.peer_map.validator_to_peer.contains_key(vid) {
-                        continue;
-                    }
-                    // Try to find PeerId from PeerBook by looking up the public key
-                    let pk_bytes = &pubkey.0;
-                    if let Ok(lpk) = litep2p::crypto::ed25519::PublicKey::try_from_bytes(pk_bytes) {
-                        let peer_id = lpk.to_peer_id();
-                        info!(validator = %vid, peer = %peer_id, "adding new epoch validator to peer_map");
-                        self.peer_map.insert(*vid, peer_id);
-                    }
-                }
-                // Remove validators no longer in the set
-                let new_ids: HashSet<ValidatorId> =
-                    validators.iter().map(|(vid, _)| *vid).collect();
-                let to_remove: Vec<ValidatorId> = self
-                    .peer_map
-                    .validator_to_peer
-                    .keys()
-                    .filter(|vid| !new_ids.contains(vid))
-                    .copied()
-                    .collect();
-                for vid in to_remove {
-                    info!(validator = %vid, "removing validator from peer_map after epoch change");
-                    self.peer_map.remove(vid);
-                }
-                // Update relay verification key map to match new epoch
-                self.validator_ids_ordered = validators.iter().map(|(vid, _)| *vid).collect();
-                self.validator_keys = validators.into_iter().collect();
-                self.update_peer_info();
+                self.handle_epoch_change(validators).await;
             }
         }
+    }
+
+    async fn handle_epoch_change(
+        &mut self,
+        validators: Vec<(ValidatorId, hotmint_types::crypto::PublicKey)>,
+    ) {
+        // Rebuild peer_map entries for new validators using PeerBook
+        for (vid, pubkey) in &validators {
+            if self.peer_map.validator_to_peer.contains_key(vid) {
+                continue;
+            }
+            // Try to find PeerId from PeerBook by looking up the public key
+            let pk_bytes = &pubkey.0;
+            if let Ok(lpk) = litep2p::crypto::ed25519::PublicKey::try_from_bytes(pk_bytes) {
+                let peer_id = lpk.to_peer_id();
+                info!(validator = %vid, peer = %peer_id, "adding new epoch validator to peer_map");
+                self.peer_map.insert(*vid, peer_id);
+            }
+        }
+        // Remove validators no longer in the set
+        let new_ids: HashSet<ValidatorId> = validators.iter().map(|(vid, _)| *vid).collect();
+        let to_remove: Vec<ValidatorId> = self
+            .peer_map
+            .validator_to_peer
+            .keys()
+            .filter(|vid| !new_ids.contains(vid))
+            .copied()
+            .collect();
+        for vid in to_remove {
+            info!(validator = %vid, "removing validator from peer_map after epoch change");
+            self.peer_map.remove(vid);
+        }
+        // Update relay verification key map to match new epoch
+        self.validator_ids_ordered = validators.iter().map(|(vid, _)| *vid).collect();
+        self.validator_keys = validators.into_iter().collect();
+        // F-28: Rebuild persistent_peers from updated peer_map
+        self.persistent_peers = self.peer_map.validator_to_peer.clone();
+        self.update_peer_info();
     }
 }
 
@@ -835,6 +910,7 @@ impl NetworkService {
 #[derive(Clone)]
 pub struct Litep2pNetworkSink {
     cmd_tx: mpsc::Sender<NetCommand>,
+    epoch_tx: watch::Sender<Option<Vec<(ValidatorId, hotmint_types::crypto::PublicKey)>>>,
 }
 
 impl Litep2pNetworkSink {
@@ -908,8 +984,7 @@ impl NetworkSink for Litep2pNetworkSink {
             .iter()
             .map(|v| (v.id, v.public_key.clone()))
             .collect();
-        if let Err(e) = self.cmd_tx.try_send(NetCommand::EpochChange(validators)) {
-            warn!("epoch change cmd dropped: {e}");
-        }
+        // F-02: Use dedicated watch channel so epoch changes are never dropped.
+        let _ = self.epoch_tx.send(Some(validators));
     }
 }
